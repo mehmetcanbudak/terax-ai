@@ -108,8 +108,27 @@ async function createPiSession() {
 async function sendPiPrompt(text) {
   const prompt = await browser.$('textarea[aria-label="Pi prompt"]');
   await prompt.waitForEnabled({ timeout: 15000 });
-  await prompt.setValue(text);
-  await browser.keys(["Enter"]);
+  await browser.execute((value) => {
+    const textarea = document.querySelector('textarea[aria-label="Pi prompt"]');
+    if (!(textarea instanceof HTMLTextAreaElement)) {
+      throw new Error("Pi prompt textarea not found");
+    }
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+  }, text);
+  await browser.waitUntil(async () => (await prompt.getValue()) === text, {
+    timeout: 15000,
+    timeoutMsg: "Pi prompt value was not applied",
+  });
+
+  const sendButton = await browser.$('button[aria-label="Send prompt"]');
+  await sendButton.waitForClickable({ timeout: 15000 });
+  await sendButton.click();
 }
 
 async function respondToLatestApproval(label) {
