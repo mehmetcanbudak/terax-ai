@@ -1,6 +1,6 @@
 # Pi sidebar manual macOS smoke report
 
-Use this report before release for PR #964 after merge conflicts are resolved and a packaged macOS app is available. This is intentionally manual because it needs real provider credentials, a custom OpenAI-compatible Zai endpoint, app restarts, and window lifecycle checks that the current macOS agent cannot execute through `tauri-driver`.
+Use this report before release for the fork-local PR #1 / `pi-sidebar` after merge conflicts are resolved and a packaged macOS app is available. This is intentionally manual because it needs real provider credentials, a custom OpenAI-compatible Zai endpoint, app restarts, and window lifecycle checks that the current macOS agent cannot execute through `tauri-driver`.
 
 ## Run metadata
 
@@ -8,7 +8,7 @@ Use this report before release for PR #964 after merge conflicts are resolved an
 | --- | --- |
 | Tester |  |
 | Date |  |
-| PR / branch | `#964` / `pi-sidebar` |
+| PR / branch | `#1` / `pi-sidebar` |
 | Commit tested |  |
 | macOS version |  |
 | CPU architecture |  |

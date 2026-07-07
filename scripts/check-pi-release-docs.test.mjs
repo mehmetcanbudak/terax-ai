@@ -37,11 +37,13 @@ describe("checkPiReleaseDocs", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("fails when release readiness loses a blocker", async () => {
+  it("fails when release readiness loses final CI deferral", async () => {
     const root = await mkdtemp(join(tmpdir(), "terax-pi-release-docs-blocker-"));
     await writeFixture(root, {
       "docs/pi-sidebar-release-readiness.md": REQUIRED_RELEASE_READINESS_TEXT.filter(
-        (line) => line !== "Maintainer must approve/re-run PR CI",
+        (line) =>
+          line !==
+          "Final CI/e2e confirmation is deferred until all non-CI work is done",
       ).join("\n"),
       "docs/pi-sidebar-manual-smoke-report.md": manualSmokeDoc,
     });
@@ -52,7 +54,7 @@ describe("checkPiReleaseDocs", () => {
     expect(result.errors).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "docs/pi-sidebar-release-readiness.md missing required release-readiness text: Maintainer must approve/re-run PR CI",
+          "docs/pi-sidebar-release-readiness.md missing required release-readiness text: Final CI/e2e confirmation is deferred until all non-CI work is done",
         ),
       ]),
     );

@@ -6,10 +6,11 @@ import { fileURLToPath } from "node:url";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const REQUIRED_RELEASE_READINESS_TEXT = [
-  "mergeStateStatus=BLOCKED",
+  "https://github.com/mehmetcanbudak/terax-ai/pull/1",
+  "Latest application-code head inspected: `e6563529da4747e119480708c28ffe505df89d36`",
+  "mergeStateStatus=UNSTABLE",
   "mergeable=MERGEABLE",
-  "conclusion=action_required",
-  "Maintainer must approve/re-run PR CI",
+  "Final CI/e2e confirmation is deferred until all non-CI work is done",
   "CI must independently run on the PR",
   "docs/pi-sidebar-manual-smoke-report.md",
   "Complete Phase C/D convergence",
@@ -30,7 +31,7 @@ export const REQUIRED_RELEASE_READINESS_TEXT = [
   "cargo clippy --locked --all-targets -- -D warnings",
   "cargo test --locked --features openclicky",
   "10M",
-  "1430.5 KB",
+  "1776.6 KB",
 ];
 
 export const REQUIRED_MANUAL_SMOKE_SECTIONS = [

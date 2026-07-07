@@ -1,32 +1,33 @@
 # Pi sidebar merge conflict audit
 
-Generated on 2026-07-07 and refreshed after resolving `origin/main` into `pi-sidebar`.
+Generated on 2026-07-07 and refreshed for the fork-local PR #1 after resolving `origin/main` into `pi-sidebar`.
 
 ## Current result
 
 The PR branch is no longer textually merge-conflicted with `origin/main` in the local repository:
 
 ```bash
-git fetch origin main
-git rev-parse HEAD origin/main
-# current local PR head
-# 78a0b3dd79554ad4af89e61d97004f3475cd9953
+git rev-parse HEAD origin/main fork/pi-sidebar
+# latest application-code head inspected: e6563529da4747e119480708c28ffe505df89d36
+# origin/main: 78a0b3dd79554ad4af89e61d97004f3475cd9953
 
 git merge-tree --write-tree HEAD origin/main
 # exits 0
+# tree: 782e0cfafdc9c074fdc90b678dde6c917e8a077b
 ```
 
-`git merge-tree --write-tree HEAD origin/main` exits 0. That means the current local branch already contains the fetched `origin/main` head and Git can produce a clean merge tree.
+`git merge-tree --write-tree HEAD origin/main` exits 0. That means the current local branch can produce a clean merge tree with the fetched upstream main branch.
 
-GitHub reports the PR as structurally mergeable but still blocked by review/check policy:
+Fork PR status when last inspected:
 
 ```bash
-gh pr view 964 --repo crynta/terax-ai --json headRefOid,mergeStateStatus,mergeable,statusCheckRollup
-# headRefOid: current pushed PR head
-# mergeStateStatus: BLOCKED
+gh pr view 1 --repo mehmetcanbudak/terax-ai --json headRefOid,mergeStateStatus,mergeable,statusCheckRollup
+# mergeStateStatus: UNSTABLE while the latest e2e (linux) job was still running
 # mergeable: MERGEABLE
-# statusCheckRollup: CodeRabbit only; no green Actions matrix yet
+# non-e2e checks inspected as successful: frontend, rust, rust-test (windows-latest), rust-test (macos-latest), coverage
 ```
+
+Final CI/e2e confirmation is deferred until all non-CI work is done.
 
 ## Resolution commit
 
@@ -45,24 +46,7 @@ The merge preserved the webview-native Pi boundary:
 
 ## CI/e2e state after conflict resolution
 
-CI is not green yet. It is waiting for maintainer action rather than local conflict resolution. Attempts from this account to rerun or approve the PR workflow return HTTP 403 (`Must have admin rights to Repository`):
-
-```bash
-gh pr checks 964 --repo crynta/terax-ai --watch=false
-# CodeRabbit pass only
-
-gh run list --repo crynta/terax-ai --workflow CI --branch pi-sidebar --limit 5
-# latest pull_request runs complete immediately with conclusion: action_required
-# jobs/logs are absent until a maintainer approves or re-runs the workflow
-
-gh run rerun <run-id> --repo crynta/terax-ai
-# HTTP 403: Must have admin rights to Repository
-
-POST /repos/crynta/terax-ai/actions/runs/<run-id>/approve
-# HTTP 403: Must have admin rights to Repository
-```
-
-The Linux e2e job, including `e2e/specs/pi-approval.e2e.mjs`, has not run on GitHub Actions for this head. A maintainer must approve or re-run the PR workflow before the release-readiness checklist can mark CI/e2e green.
+CI should be checked at the end of the non-CI cleanup pass. As of the last lightweight PR inspection, the fork-local CI run for `e6563529d` had successful non-e2e jobs and an in-progress Linux e2e job. The e2e job should be rechecked after the remaining documentation and cleanup commits are pushed.
 
 ## Previously conflicted paths, now resolved
 
@@ -70,7 +54,6 @@ Before `b73b79aa`, the direct merge attempt reported 99 conflicted paths across 
 
 ## Maintainer follow-up path
 
-1. Approve/re-run GitHub Actions for PR #964.
-2. Confirm the full CI matrix and Linux e2e job are green.
-3. Complete the manual macOS Pi smoke report in `docs/pi-sidebar-manual-smoke-report.md`.
-4. Finish updater key rotation verification with maintainer-held signing secrets and a signed feed.
+1. Confirm the final CI matrix and Linux e2e job are green after the remaining non-CI work is pushed.
+2. Complete the manual macOS Pi smoke report in `docs/pi-sidebar-manual-smoke-report.md`.
+3. Finish updater key rotation verification with maintainer-held signing secrets and a signed feed.

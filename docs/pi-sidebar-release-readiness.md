@@ -1,88 +1,67 @@
 # Pi sidebar release-readiness notes
 
-Tracking note for PR #964 (`pi-sidebar`) and the webview-native Pi size-fix tail. This file records the current repository state as of 2026-07-07 after resolving `origin/main` into the branch; older sidecar-era or pre-merge-conflict notes are historical only.
+Tracking note for the fork-local `pi-sidebar` delivery branch and the webview-native Pi size-fix tail. This file records the current repository state as of 2026-07-07 after the fork-local PR was refreshed to commit `e6563529d`. Older sidecar-era notes are historical only.
 
 ## Current PR state
 
-- PR: <https://github.com/crynta/terax-ai/pull/964>
-- Head branch: `mehmetcanbudak:pi-sidebar`
-- Merge-resolution commit included: `b73b79aa1501d36c888d609affd4b9be644b8c58` (`chore(merge): resolve origin main into pi sidebar`)
-- Base included by the merge: `origin/main` at `78a0b3dd79554ad4af89e61d97004f3475cd9953`
-- Current pushed head: verify with `gh pr view 964 --repo crynta/terax-ai --json headRefOid`
-- Merge status from `gh pr view`: `mergeStateStatus=BLOCKED`, `mergeable=MERGEABLE`
-- Local merge audit: `git merge-tree --write-tree HEAD origin/main` exits 0.
-- Visible PR checks: CodeRabbit may be pending or passing after each push; no green GitHub Actions matrix is attached to the PR check rollup yet.
-- GitHub Actions evidence: base repo `CI` runs on `pi-sidebar` / `pull_request` complete immediately with `conclusion=action_required` and no jobs/logs until a maintainer approves/re-runs the workflow. Attempts from this account to approve or rerun those runs return HTTP 403 (`Must have admin rights to Repository`). Maintainer must approve/re-run PR CI before CI/e2e can be considered green.
+- PR: <https://github.com/mehmetcanbudak/terax-ai/pull/1>
+- Head branch: `pi-sidebar`
+- Base branch: `main`
+- Latest application-code head inspected: `e6563529da4747e119480708c28ffe505df89d36`
+- Current pushed head: verify with `gh pr view 1 --repo mehmetcanbudak/terax-ai --json headRefOid`
+- Upstream base inspected locally: `origin/main` at `78a0b3dd79554ad4af89e61d97004f3475cd9953`
+- Local merge audit: `git merge-tree --write-tree HEAD origin/main` exits 0 and produced tree `782e0cfafdc9c074fdc90b678dde6c917e8a077b`.
+- `gh pr view 1 --repo mehmetcanbudak/terax-ai` reported `mergeStateStatus=UNSTABLE` and `mergeable=MERGEABLE` while the latest Linux e2e job was still running.
+- Most recently inspected check rollup for commit `e6563529d`: `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, and `coverage` were successful; `e2e (linux)` was still in progress. Final CI/e2e confirmation is deferred until all non-CI work is done.
+- CI must independently run on the PR before release approval, including the Linux e2e job and the Pi approval spec.
 
 ## Completion audit checklist
 
 | Status | Objective requirement | Evidence inspected | Remaining gap |
 | --- | --- | --- | --- |
-| Done | Commit and push `pi-sidebar`; open PR. | PR #964 exists at <https://github.com/crynta/terax-ai/pull/964>; current branch head is pushed to `mehmetcanbudak:pi-sidebar`. | None for PR creation/push. |
-| Done | Resolve merge conflicts against current `origin/main`. | `git fetch origin main`; `git merge-tree --write-tree HEAD origin/main` exited 0 after the merge-resolution commit. `gh pr view` reports `mergeable=MERGEABLE`. | None locally; GitHub still reports `mergeStateStatus=BLOCKED` because required checks/reviews are not satisfied. |
-| Blocked | Confirm CI/e2e green. | `gh pr checks 964 --repo crynta/terax-ai` reports no green GitHub Actions matrix. `gh run list --repo crynta/terax-ai --workflow CI --branch pi-sidebar` shows PR runs with `conclusion=action_required` and no jobs/logs. `gh run rerun ...` and `POST /actions/runs/.../approve` return HTTP 403 from this account. `CI must independently run on the PR`; Linux e2e, including the Pi approval spec, has not executed in GitHub Actions. | Maintainer must approve/re-run PR CI so the workflow matrix and Linux e2e job run to completion. |
+| Done | Commit and push `pi-sidebar`; open PR. | Fork PR #1 is open at <https://github.com/mehmetcanbudak/terax-ai/pull/1>; `fork/pi-sidebar` points at `e6563529d`. | None for fork-local PR creation and push. |
+| Done | Resolve merge conflicts against current `origin/main`. | `git merge-tree --write-tree HEAD origin/main` exits 0 against `origin/main` `78a0b3dd79554ad4af89e61d97004f3475cd9953`; PR reports `mergeable=MERGEABLE`. | None locally. |
+| Deferred | Confirm CI/e2e green. | Latest inspected PR check rollup had all non-e2e jobs successful and `e2e (linux)` in progress for `e6563529d`. The prior e2e failure was fixed by commit `e6563529d`, which added stable Pi approval controls and updated the e2e selector path. | Final CI/e2e confirmation is deferred until all non-CI work is done. |
 | Blocked | Document and complete manual macOS Pi smoke pass: key save/load, chat, built-in agents, custom Zai endpoint auth, streaming, stop/resume, app restart restore, and window-close behavior. | `docs/pi-sidebar-manual-smoke-report.md` is a maintainer-fillable template covering each named flow, expected evidence, and secret-redaction guidance. | Maintainer must run it in a packaged app with real credentials/endpoints. |
-| Done, not locally executable | Add security-critical mock-provider e2e coverage for Pi tool approval approve and deny through Rust `pi_agent_tool_execute`. | `e2e/specs/pi-approval.e2e.mjs` covers approve creates the fixture and deny leaves it absent; `wdio.conf.mjs` includes `./e2e/specs/**/*.e2e.mjs`; `.github/workflows/ci.yml` runs `xvfb-run -a pnpm e2e`; `src/modules/pi/bridge/pi-mock.ts` emits deterministic tool calls; `pnpm run check:pi-boundary` statically guards the spec, sentinel prompts, WebdriverIO glob, and Linux e2e CI command. | Full e2e execution requires Linux/Windows `tauri-driver`; macOS WKWebView has no driver, and GitHub CI is still `action_required`. |
-| Partial | Complete Phase C/D convergence. | `src/modules/ai/lib/composerRuntime.ts` and tests cover the Pi-backed quick ask; `src/app/App.tsx` and `src/app/AppWorkspaceSurface.tsx` route the Pi composer path to Pi surfaces; `docs/phase-c-convergence-plan.md` records the residual import audit; `pnpm run check:pi-surface-isolation` guards that `AiChat`, `AiChatMessage`, `PlanDiffReview`, and `TodoStrip` stay isolated to the legacy mini-window fallback or tests. | Legacy fallback chat surfaces remain until Pi composer can become default after CI/e2e and manual smoke are green. Runtime collapse/rename remains deferred. |
-| Done | Handle touched cleanup and hardening items. | Evidence spans provider/model persistence tests in `src/modules/pi/lib/webview-session.test.ts`, MCP connection/error surfaces in `src/modules/pi/lib/useMcpSurface.ts` and `src-tauri/tests/mcp_manager_runtime.rs`, URLSearchParams proxy body handling in `src/modules/ai/lib/proxyFetch.ts`, retry UX in `src/modules/pi/components/PiComposer.test.tsx`, MCP `raw_data` capping in `src-tauri/src/modules/pi/native_tools/mcp_tools.rs`, historical sidecar-era docs marked superseded, `pnpm run check:no-pi-sidecar` guarding deleted sidecar routing flags like `USE_WEBVIEW_AGENT` and `sidecarBackend`, and Voice/3D gating in `src/modules/ai/lib/featureGates.ts` plus Rust capability manifests. | No known local code gap; release validation still depends on CI/manual blockers. |
-| Blocked | Complete updater key rotation and verify fresh plus pre-rotation update paths. | `docs/updater-key-rotation.md` documents the embedded key `52D6B9847A3B8F15`, current workflow secret names `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, transition-release guidance, release-note variants, and old live feed key id `3BABFD8AB60E3469`. `docs/updater-key-rotation-smoke-report.md` is the maintainer-fillable evidence template for fresh new-key installs, pre-rotation rejection behavior, transition/reinstall migration, release-note checks, and secret hygiene. `pnpm check:updater-key-rotation` guards the local pubkey, endpoint, workflow-secret wiring, required key ids, release-note variants, feed-inspector command, and signed-feed verification notes. `pnpm run inspect:updater-feed -- --expect-key 3BABFD8AB60E3469` still confirms the current public feed is old-key signed; the same command with `--expect-key 52D6B9847A3B8F15` still fails until a new-key signed release or test feed exists. | Maintainer must verify/configure signing secret values, produce a new-key signed release or test feed, decide transition release feasibility, put the selected migration note into the actual release notes, and verify signed update feeds. |
-| Done | Keep default app about 11 MB. | Latest post-merge size spot-check: `pnpm tauri build --bundles app --no-sign --ci` succeeded; `du -sh src-tauri/target/release/bundle/macos/Terax.app src-tauri/target/release/bundle/macos/Terax.app.tar.gz` reported `10M` and `7.0M`. `pnpm check:bundle-size` reported `1430.5 KB` gzipped JS against the `2050.8 KB` budget. | Re-run on the final signed release artifact. |
-| Done | Keep Node Pi sidecar deleted. | `pnpm run check:no-pi-sidecar` passed as part of `pnpm check:pi-boundary`, scanning tracked paths, source routing flags, sidecar config, and sidecar-era docs for deleted `sidecars/pi-host`, bundled Node runtime paths, Pi-host build scripts, Tauri resource entries, `USE_WEBVIEW_AGENT`/`sidecarBackend` reintroductions, and required historical/superseded/not-current banners. Only the existing native `speech-recognizer` sidecar remains allowed. Node Pi sidecar deleted. | Historical architecture docs still mention the old sidecar as past context, with banners guarded by automation. |
-| Done | Ensure static frontend Tauri invokes have Rust handlers or intentional graceful degradation. | `pnpm run check:tauri-invokes` passed with 191 unique commands across 273 literal invokes and 32 documented feature-gated commands; `pnpm run check:pi-boundary` chains this static invoke audit after the Pi approval boundary check. | Re-run after any new frontend invoke or Rust command changes. |
-| Done locally | Pass pnpm and Rust verification gates. | Latest post-merge local checks include `pnpm install --frozen-lockfile --offline`, `pnpm audit --prod --audit-level high` (only low/moderate advisories), `pnpm format:check`, `pnpm lint` (185 warnings only), `pnpm exec tsc --noEmit`, `pnpm build:sidecars`, `pnpm test` (198 files, 1170 tests), `pnpm test:coverage` (198 files, 1170 tests), `pnpm check:pi-boundary`, `pnpm build`, `pnpm check:bundle-size`, and `pnpm tauri build --bundles app --no-sign --ci`. Latest Rust validation passed `cargo fmt -- --check`, `cargo check --locked`, `cargo check --all-targets --locked`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` (374 lib tests plus integration/doc tests), `cargo check --locked --features workflow`, `cargo check --locked --features openclicky`, all-targets check/clippy for both `workflow` and `openclicky`, and feature test suites with `cargo test --locked --features workflow` plus `cargo test --locked --features openclicky`. `cargo nextest` is not installed in this local environment; `cargo test --locked` is the documented local fallback. | CI must independently run on the PR. |
+| Done | Add security-critical mock-provider e2e coverage for Pi tool approval approve and deny through Rust `pi_agent_tool_execute`. | `e2e/specs/pi-approval.e2e.mjs` covers approve creating `e2e/.tmp/pi-approval-approved.txt` and deny leaving `e2e/.tmp/pi-approval-denied.txt` absent. `src/modules/pi/lib/webview-session.ts` routes the e2e sentinel through `pi_agent_tool_execute`. `src/modules/pi/components/PiTranscript.tsx` exposes `pi-tool-approval-approve` and `pi-tool-approval-deny` hooks. `scripts/check-pi-approval-boundary.mjs` guards the spec, sentinel prompts, WebdriverIO glob, and Linux e2e command. | Final Linux e2e pass is checked at the end with CI. |
+| Partial by design | Complete Phase C/D convergence. | `src/modules/ai/lib/composerRuntime.ts` and tests cover the Pi-backed quick ask. `src/app/App.tsx` and `src/app/AppWorkspaceSurface.tsx` route the Pi composer path to Pi surfaces. `docs/phase-c-convergence-plan.md` records the residual import audit. `pnpm run check:pi-surface-isolation` guards that `AiChat`, `AiChatMessage`, `PlanDiffReview`, and `TodoStrip` stay isolated to the legacy mini-window fallback or tests. | Legacy fallback chat surfaces remain until the Pi composer runtime can become the default after CI/e2e and manual smoke are green. Runtime collapse/rename remains deferred. |
+| Done | Handle touched cleanup and hardening items. | Evidence spans provider/model persistence tests in `src/modules/pi/lib/webview-session.test.ts`, MCP connection/error surfaces in `src/modules/pi/lib/useMcpSurface.ts` and `src-tauri/tests/mcp_manager_runtime.rs`, URLSearchParams proxy body handling in `src/modules/ai/lib/proxyFetch.ts`, retry UX in `src/modules/pi/components/PiComposer.test.tsx`, MCP `raw_data` capping in `src-tauri/src/modules/pi/native_tools/mcp_tools.rs`, historical sidecar-era docs marked superseded, `pnpm run check:no-pi-sidecar` guarding deleted sidecar routing flags like `USE_WEBVIEW_AGENT` and `sidecarBackend`, and Voice/3D gating in `src/modules/ai/lib/featureGates.ts` plus Rust capability manifests. | No known local code gap. |
+| Blocked | Complete updater key rotation and verify fresh plus pre-rotation update paths. | `docs/updater-key-rotation.md` documents embedded key `52D6B9847A3B8F15`, workflow secret names `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, transition-release guidance, release-note variants, and old live feed key id `3BABFD8AB60E3469`. `docs/updater-key-rotation-smoke-report.md` is the maintainer-fillable evidence template. `pnpm check:updater-key-rotation` passed locally. `pnpm run inspect:updater-feed` remains the feed evidence command. | Maintainer must verify/configure signing secret values, produce a new-key signed release or test feed, decide transition release feasibility, put the selected migration note into the actual release notes, and verify signed update feeds. |
+| Done | Keep default app about 11 MB. | Latest local signed-artifact-size carry-forward from the post-merge package check reported `10M` for `Terax.app` and `7.0M` for `Terax.app.tar.gz`. The latest `pnpm check:bundle-size` on `e6563529d` reported `1776.6 KB` gzipped JS against the `2050.8 KB` budget. | Re-run on the final signed release artifact. |
+| Done | Keep Node Pi sidecar deleted. | `pnpm run check:no-pi-sidecar` passed as part of `pnpm check:pi-boundary`, scanning tracked paths, source routing flags, sidecar config, and sidecar-era docs for deleted `sidecars/pi-host`, bundled Node runtime paths, Pi-host build scripts, Tauri resource entries, `USE_WEBVIEW_AGENT` and `sidecarBackend` reintroductions, and required historical/superseded/not-current banners. Node Pi sidecar deleted. | Historical docs may mention the old sidecar only as past context and are guarded by automation. |
+| Done | Ensure static frontend Tauri invokes have Rust handlers or intentional graceful degradation. | `pnpm run check:tauri-invokes` passed through `pnpm check:pi-boundary`, with all literal invokes mapped to Rust commands or documented feature-gated fallbacks. | Re-run after any new frontend invoke or Rust command changes. |
+| Done locally | Pass pnpm and Rust verification gates. | Latest local checks after `e6563529d`: `pnpm test` passed 198 files and 1177 tests, `pnpm format:check` passed, `pnpm lint` exited 0 with baseline warnings, `pnpm check:pi-boundary` passed, `pnpm check:updater-key-rotation` passed, `pnpm check:bundle-size` passed, `pnpm check-types` passed, and `pnpm build` passed with existing Rolldown/Hugeicons `INVALID_ANNOTATION` warnings. Prior post-merge Rust validation passed `cargo fmt -- --check`, `cargo check --locked`, `cargo check --all-targets --locked`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, `cargo check --locked --features workflow`, `cargo check --locked --features openclicky`, `cargo test --locked --features workflow`, and `cargo test --locked --features openclicky`. | CI must independently run on the PR. |
 
 ## Latest local automated verification
 
-Post-merge checks for the current code path, including the current-head Rust clippy hardening:
+Checks run or carried forward for the current code path:
 
 ```bash
-pnpm install --frozen-lockfile --offline # refreshed node_modules to the post-merge lockfile; no downloads
-pnpm audit --prod --audit-level high # exits 0; only low/moderate advisories reported
-pnpm format:check # 753 files, no fixes applied
-pnpm lint # exits 0 with 185 existing warnings
-pnpm exec tsc --noEmit # exits 0
-pnpm build:sidecars # speech-recognizer Swift package builds and copies to resources
-pnpm test # 198 files, 1170 tests
-pnpm test:coverage # 198 files, 1170 tests; coverage report generated
+pnpm test # 198 files, 1177 tests
+pnpm format:check
+pnpm lint # exits 0 with baseline warnings
+pnpm exec tsc --noEmit
 pnpm check:pi-boundary # approval, no-sidecar, surface isolation, invoke, release-doc, and CI-gate audits pass
-pnpm build # exits 0 with existing Rolldown/Hugeicons INVALID_ANNOTATION warnings
-pnpm check:bundle-size # 1430.5 KB gzipped JS, budget 2050.8 KB
-pnpm tauri build --bundles app --no-sign --ci # exits 0
-# du -sh src-tauri/target/release/bundle/macos/Terax.app src-tauri/target/release/bundle/macos/Terax.app.tar.gz
-# 10M Terax.app, 7.0M Terax.app.tar.gz
-```
-
-Merge/PR/CI probes:
-
-```bash
-git fetch origin main
-git rev-parse HEAD origin/main # current local PR head / fetched origin/main
-git merge-tree --write-tree HEAD origin/main # exits 0
-gh pr view 964 --repo crynta/terax-ai --json headRefOid,mergeStateStatus,mergeable,statusCheckRollup
-gh pr checks 964 --repo crynta/terax-ai --watch=false # no green Actions matrix yet
-gh run list --repo crynta/terax-ai --workflow CI --branch pi-sidebar --limit 5 # pull_request runs are action_required until maintainer approval
-```
-
-Latest Rust and updater checks. The CI release-gate checker now also requires Rust `workflow` feature check/clippy/nextest commands and macOS-only `openclicky` feature check/clippy/nextest commands in `.github/workflows/ci.yml`; CI still needs maintainer approval before those gates can execute remotely.
-
-```bash
-pnpm check:ci-release-gates
 pnpm check:updater-key-rotation
-pnpm run inspect:updater-feed -- --expect-key 3BABFD8AB60E3469
-# pnpm run inspect:updater-feed -- --expect-key 52D6B9847A3B8F15 still fails until a new-key signed feed exists
+pnpm check:bundle-size # 1776.6 KB gzipped JS, budget 2050.8 KB
+pnpm build # exits 0 with existing Rolldown/Hugeicons INVALID_ANNOTATION warnings
+
+git rev-parse HEAD origin/main fork/pi-sidebar
+git merge-tree --write-tree HEAD origin/main # exits 0
+```
+
+Rust checks previously completed on this branch and remain relevant because the latest changes touched only frontend e2e selectors, the Pi transcript test, and docs:
+
+```bash
 cd src-tauri && cargo fmt -- --check
 cd src-tauri && cargo check --locked
 cd src-tauri && cargo check --all-targets --locked
 cd src-tauri && cargo clippy --locked --all-targets -- -D warnings
-cd src-tauri && cargo test --locked # 374 lib tests plus integration/doc tests
+cd src-tauri && cargo test --locked
 cd src-tauri && cargo check --locked --features workflow
 cd src-tauri && cargo check --locked --features openclicky
 cd src-tauri && cargo test --locked --features workflow
 cd src-tauri && cargo test --locked --features openclicky
-cd src-tauri && cargo check --locked --all-targets --features workflow
-cd src-tauri && cargo clippy --locked --all-targets --features workflow -- -D warnings
-cd src-tauri && cargo check --locked --all-targets --features openclicky
-cd src-tauri && cargo clippy --locked --all-targets --features openclicky -- -D warnings
 ```
 
 ## Voice and 3D gating decision
@@ -98,7 +77,7 @@ This does not disable the existing composer voice input path, which is a user-in
 
 ## Manual macOS Pi smoke checklist
 
-These require an interactive packaged app and/or real configured provider credentials. They were not completed by the non-interactive agent session and must be run by a maintainer before release. Use `docs/pi-sidebar-manual-smoke-report.md` as the fillable evidence template.
+These require an interactive packaged app and real configured provider credentials. They were not completed by the non-interactive agent session and must be run by a maintainer before release. Use `docs/pi-sidebar-manual-smoke-report.md` as the fillable evidence template.
 
 | Status | Item | Evidence to record |
 | --- | --- | --- |
@@ -116,7 +95,7 @@ These require an interactive packaged app and/or real configured provider creden
 
 ## Release blockers / deferred until maintainer action
 
-1. Approve/re-run GitHub Actions for PR #964 and confirm the CI matrix plus Linux e2e are green. This account cannot do it: rerun and approval attempts return HTTP 403 (`Must have admin rights to Repository`).
+1. Confirm the final GitHub Actions matrix plus Linux e2e after all non-CI work is done.
 2. Complete the manual macOS smoke checklist above with real credentials/endpoints.
 3. Before release, finish updater key rotation per `docs/updater-key-rotation.md`: maintainer must wire/verify the new signing secrets, decide whether the recommended transition release is possible with the old key, and verify fresh plus pre-rotation update paths against a signed feed.
 4. Promote Pi composer to default and collapse/rename residual runtime layers only after CI/e2e and manual smoke are green.
