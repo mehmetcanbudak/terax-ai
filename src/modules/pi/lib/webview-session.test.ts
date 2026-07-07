@@ -7,12 +7,13 @@
  * - Event emission matches the session lifecycle
  * - Session CRUD operations work through the backend
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+
 import { PI_SESSION_EVENT } from "@/modules/pi/lib/sessions";
 import {
   deserializeAgentTranscript,
   serializeAgentTranscript,
 } from "@/modules/pi/lib/sessions/agent-transcript";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ─── Mock dependencies ───
 
@@ -41,6 +42,16 @@ vi.mock("@/modules/pi/bridge/pi-skills", () => ({
     mockBuildSystemPromptWithSkills(...args),
 }));
 
+const mockExecuteAgentTool = vi.fn();
+const mockGrantAgentTool = vi.fn();
+vi.mock("@/modules/pi/bridge/pi-tools", () => ({
+  executeAgentTool: (...args: unknown[]) => mockExecuteAgentTool(...args),
+  grantAgentTool: (...args: unknown[]) => mockGrantAgentTool(...args),
+  piBridgeTools: {
+    readFile: vi.fn(async () => ({ content: null })),
+  },
+}));
+
 // ─── Tests ───
 
 describe("Pi webview session backend", () => {
@@ -48,6 +59,7 @@ describe("Pi webview session backend", () => {
   let webviewSession: typeof import("@/modules/pi/lib/webview-session");
 
   beforeEach(async () => {
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     mockInvoke.mockResolvedValue(undefined);
     mockEmit.mockResolvedValue(undefined);
@@ -65,6 +77,11 @@ describe("Pi webview session backend", () => {
       prompt: vi.fn(),
       abort: vi.fn(),
     });
+    mockExecuteAgentTool.mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+      details: null,
+    });
+    mockGrantAgentTool.mockResolvedValue(undefined);
 
     webviewSession = await import("@/modules/pi/lib/webview-session");
   });
@@ -194,6 +211,105 @@ describe("Pi webview session backend", () => {
       expect(sent).toContain("workspace_root: /ws");
       expect(sent).toContain("active_file: /ws/src/a.ts");
       expect(sent).toContain("fix the bug");
+    });
+
+    it("routes the e2e approval fixture through the Rust executor when approved", async () => {
+      const { session } = await webviewSession.webviewSessionCreate(
+        "E2E Approve",
+        "/workspace",
+      );
+      const send = webviewSession.webviewSessionSend(
+        session.id,
+        "[terax-e2e-pi-approval-approved] write the fixture",
+        null,
+      );
+
+      await vi.waitFor(() => {
+        expect(mockEmit).toHaveBeenCalledWith(
+          "pi:session-event",
+          expect.objectContaining({
+            type: PI_SESSION_EVENT.ToolApprovalRequested,
+            payload: expect.objectContaining({
+              toolCallId: "e2e-pi-write-approved",
+              toolName: "write_file",
+            }),
+          }),
+        );
+      });
+      await webviewSession.webviewSessionToolRespond(
+        session.id,
+        "e2e-pi-write-approved",
+        true,
+      );
+
+      const result = await send;
+
+      expect(result.session.status).toBe("idle");
+      expect(mockGrantAgentTool).toHaveBeenCalledWith(
+        session.id,
+        "e2e-pi-write-approved",
+        "write",
+      );
+      expect(mockExecuteAgentTool).toHaveBeenCalledWith({
+        sessionId: session.id,
+        toolCallId: "e2e-pi-write-approved",
+        toolName: "write",
+        cwd: "/workspace",
+        input: {
+          path: "e2e/.tmp/pi-approval-approved.txt",
+          content: "approved through Rust pi_agent_tool_execute\n",
+        },
+      });
+      expect(mockEmit).toHaveBeenCalledWith(
+        "pi:session-event",
+        expect.objectContaining({
+          type: PI_SESSION_EVENT.OutputText,
+          payload: { text: "Mock pi tool follow-up: write completed." },
+        }),
+      );
+    });
+
+    it("does not execute the e2e approval fixture when denied", async () => {
+      const { session } = await webviewSession.webviewSessionCreate(
+        "E2E Deny",
+        "/workspace",
+      );
+      const send = webviewSession.webviewSessionSend(
+        session.id,
+        "[terax-e2e-pi-approval-denied] write the fixture",
+        null,
+      );
+
+      await vi.waitFor(() => {
+        expect(mockEmit).toHaveBeenCalledWith(
+          "pi:session-event",
+          expect.objectContaining({
+            type: PI_SESSION_EVENT.ToolApprovalRequested,
+            payload: expect.objectContaining({
+              toolCallId: "e2e-pi-write-denied",
+              toolName: "write_file",
+            }),
+          }),
+        );
+      });
+      await webviewSession.webviewSessionToolRespond(
+        session.id,
+        "e2e-pi-write-denied",
+        false,
+      );
+
+      const result = await send;
+
+      expect(result.session.status).toBe("idle");
+      expect(mockGrantAgentTool).not.toHaveBeenCalled();
+      expect(mockExecuteAgentTool).not.toHaveBeenCalled();
+      expect(mockEmit).toHaveBeenCalledWith(
+        "pi:session-event",
+        expect.objectContaining({
+          type: PI_SESSION_EVENT.OutputText,
+          payload: { text: "Mock pi tool follow-up: write denied." },
+        }),
+      );
     });
 
     it("resolves a pending ask_question with the user's answer", async () => {

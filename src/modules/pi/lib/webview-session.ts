@@ -79,6 +79,21 @@ const pendingApprovals = new PendingApprovalRegistry();
 /** In-flight interactive questions, resolved on user answer or teardown. */
 const pendingQuestions = new PendingQuestionRegistry();
 
+const E2E_APPROVE_WRITE_PROMPT = "[terax-e2e-pi-approval-approved]";
+const E2E_DENY_WRITE_PROMPT = "[terax-e2e-pi-approval-denied]";
+const E2E_APPROVED_FIXTURE_PATH = "e2e/.tmp/pi-approval-approved.txt";
+const E2E_DENIED_FIXTURE_PATH = "e2e/.tmp/pi-approval-denied.txt";
+const E2E_APPROVED_FIXTURE_CONTENT =
+  "approved through Rust pi_agent_tool_execute\n";
+const E2E_DENIED_FIXTURE_CONTENT = "denied should not be written\n";
+
+type E2eApprovalFixture = {
+  content: string;
+  followUp: string;
+  path: string;
+  toolCallId: string;
+};
+
 /**
  * Ask the user a multiple-choice question and block until they answer. Emits a
  * QuestionAsked event the UI renders as choices; resolves when the user
@@ -165,6 +180,38 @@ function getSession(sessionId: string): SessionRecord {
   const record = sessions.get(sessionId);
   if (!record) throw new Error(`Session ${sessionId} not found`);
   return record;
+}
+
+function resolveE2eApprovalFixture(
+  promptText: string,
+): E2eApprovalFixture | null {
+  if (promptText.includes(E2E_APPROVE_WRITE_PROMPT)) {
+    return {
+      content: E2E_APPROVED_FIXTURE_CONTENT,
+      followUp: "Mock pi tool follow-up: write completed.",
+      path: E2E_APPROVED_FIXTURE_PATH,
+      toolCallId: "e2e-pi-write-approved",
+    };
+  }
+  if (promptText.includes(E2E_DENY_WRITE_PROMPT)) {
+    return {
+      content: E2E_DENIED_FIXTURE_CONTENT,
+      followUp: "Mock pi tool follow-up: write denied.",
+      path: E2E_DENIED_FIXTURE_PATH,
+      toolCallId: "e2e-pi-write-denied",
+    };
+  }
+  return null;
+}
+
+function nativeToolResultText(result: {
+  content: Array<{ text?: string }>;
+  details?: unknown;
+}) {
+  return result.content
+    .map((item) => (typeof item.text === "string" ? item.text : ""))
+    .filter(Boolean)
+    .join("\n");
 }
 
 type PiSessionProviderMetadata = Pick<
@@ -324,6 +371,95 @@ function requestToolApproval(
   });
 }
 
+async function handleE2eApprovalTurn(
+  sessionId: string,
+  promptText: string,
+  cwd: string,
+): Promise<PiSessionSendResult | null> {
+  const fixture = resolveE2eApprovalFixture(promptText);
+  if (!fixture) return null;
+
+  const input = { path: fixture.path, content: fixture.content };
+  const toolName = "write_file";
+  const nativeToolName = "write";
+  const approved = await requestToolApproval(
+    sessionId,
+    toolName,
+    fixture.toolCallId,
+    input,
+  );
+
+  let finalStatus: PiSession["status"] = "idle";
+  if (approved) {
+    try {
+      const { executeAgentTool, grantAgentTool } = await import(
+        "../bridge/pi-tools"
+      );
+      await grantAgentTool(sessionId, fixture.toolCallId, nativeToolName);
+      const result = await executeAgentTool({
+        sessionId,
+        toolCallId: fixture.toolCallId,
+        toolName: nativeToolName,
+        cwd,
+        input,
+      });
+      emitEvent(sessionId, {
+        id: nextPiEventId(),
+        type: PI_SESSION_EVENT.ToolResult,
+        sessionId,
+        createdAt: new Date().toISOString(),
+        payload: {
+          toolCallId: fixture.toolCallId,
+          toolName,
+          input,
+          output: {
+            content: nativeToolResultText(result),
+            details: result.details ?? null,
+          },
+        },
+      });
+      emitEvent(sessionId, {
+        id: nextPiEventId(),
+        type: PI_SESSION_EVENT.OutputText,
+        sessionId,
+        createdAt: new Date().toISOString(),
+        payload: { text: fixture.followUp },
+      });
+    } catch (error) {
+      finalStatus = "error";
+      emitEvent(sessionId, {
+        id: nextPiEventId(),
+        type: PI_SESSION_EVENT.Error,
+        sessionId,
+        createdAt: new Date().toISOString(),
+        payload: { message: String(error) },
+      });
+    }
+  } else {
+    emitEvent(sessionId, {
+      id: nextPiEventId(),
+      type: PI_SESSION_EVENT.OutputText,
+      sessionId,
+      createdAt: new Date().toISOString(),
+      payload: { text: fixture.followUp },
+    });
+  }
+
+  emitEvent(sessionId, {
+    id: nextPiEventId(),
+    type: PI_SESSION_EVENT.Status,
+    sessionId,
+    createdAt: new Date().toISOString(),
+    payload: { status: finalStatus },
+  });
+  const session = updateSession(sessionId, {
+    status: finalStatus,
+    lastPrompt: promptText,
+  });
+  await persistSession(session, []);
+  return { accepted: true, session, events: [] };
+}
+
 export async function webviewSessionCreate(
   title?: string,
   cwd?: string | null,
@@ -419,7 +555,8 @@ export async function webviewSessionSend(
   context?: PiPromptContext | null,
   options?: { thinkingLevel?: unknown; regenerateBranchGroupId?: string },
 ): Promise<PiSessionSendResult> {
-  const { agent } = getSession(sessionId);
+  const record = getSession(sessionId);
+  const { agent } = record;
 
   // Guard against concurrent sends — the Agent is single-threaded.
   if (agent.state.isStreaming) {
@@ -498,6 +635,13 @@ export async function webviewSessionSend(
     },
     turnCollector,
   );
+
+  const e2eApprovalResult = await handleE2eApprovalTurn(
+    sessionId,
+    promptText,
+    record.session.cwd ?? "/",
+  );
+  if (e2eApprovalResult) return e2eApprovalResult;
 
   // The translator owns the streaming output/reasoning/tool mapping using the
   // SDK's own delta events (see sessions/agent-events.ts). Session-level

@@ -1,9 +1,10 @@
 /**
  * Security flow: webview-native Pi tool approvals, end to end.
  *
- * The deterministic Pi faux provider emits a write_file tool call when it sees
- * the sentinel prompts below. Approving must create the file through the Rust
- * `pi_agent_tool_execute` path; denying must leave the file absent.
+ * In e2e mock mode, the webview Pi session translates the sentinel prompts
+ * below into a deterministic write_file approval flow. Approving must create
+ * the file through the Rust `pi_agent_tool_execute` path; denying must leave
+ * the file absent.
  */
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
