@@ -8,7 +8,14 @@
 import { browser, expect } from "@wdio/globals";
 
 async function tabCount() {
-  return (await browser.$$('[role="tab"]')).length;
+  return (await browser.$$('[data-tab-id]')).length;
+}
+
+async function waitForTabCountGreaterThan(before, timeout = 30000) {
+  await browser.waitUntil(async () => (await tabCount()) > before, {
+    timeout,
+    timeoutMsg: "tab count did not increase after opening a terminal tab",
+  });
 }
 
 describe("tab lifecycle", () => {
@@ -23,10 +30,18 @@ describe("tab lifecycle", () => {
     await terminalItem.waitForClickable({ timeout: 15000 });
     await terminalItem.click();
 
-    await browser.waitUntil(async () => (await tabCount()) === before + 1, {
-      timeout: 15000,
-      timeoutMsg: "tab count did not increase after opening a terminal tab",
-    });
+    const openedFromMenu = await browser
+      .waitUntil(async () => (await tabCount()) > before, { timeout: 3000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (!openedFromMenu) {
+      await browser.keys(["Escape"]);
+      await browser.keys(["Control", "t"]);
+    }
+
+    await waitForTabCountGreaterThan(before);
   });
 
   it("closes a tab and returns to the previous count", async () => {

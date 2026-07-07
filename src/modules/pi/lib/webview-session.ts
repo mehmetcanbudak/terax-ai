@@ -11,6 +11,7 @@ import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { estimateCost } from "../../ai/config";
+import { isE2eMockEnabled } from "../../ai/lib/mockFlags";
 import { createTauriAgent, resolveAgentModel } from "../bridge/pi-session";
 import {
   buildSystemPromptWithSkills,
@@ -93,6 +94,16 @@ type E2eApprovalFixture = {
   path: string;
   toolCallId: string;
 };
+
+type PendingE2eApprovalTurn = {
+  cwd: string;
+  fixture: E2eApprovalFixture;
+  input: { path: string; content: string };
+  nativeToolName: "write";
+  toolName: "write_file";
+};
+
+const pendingE2eApprovalTurns = new Map<string, PendingE2eApprovalTurn>();
 
 /**
  * Ask the user a multiple-choice question and block until they answer. Emits a
@@ -185,6 +196,7 @@ function getSession(sessionId: string): SessionRecord {
 function resolveE2eApprovalFixture(
   promptText: string,
 ): E2eApprovalFixture | null {
+  if (!isE2eMockEnabled()) return null;
   if (promptText.includes(E2E_APPROVE_WRITE_PROMPT)) {
     return {
       content: E2E_APPROVED_FIXTURE_CONTENT,
@@ -212,6 +224,17 @@ function nativeToolResultText(result: {
     .map((item) => (typeof item.text === "string" ? item.text : ""))
     .filter(Boolean)
     .join("\n");
+}
+
+function e2eApprovalKey(sessionId: string, toolCallId: string): string {
+  return `${sessionId}:${toolCallId}`;
+}
+
+function clearPendingE2eApprovalTurnsForSession(sessionId: string): void {
+  const prefix = `${sessionId}:`;
+  for (const key of pendingE2eApprovalTurns.keys()) {
+    if (key.startsWith(prefix)) pendingE2eApprovalTurns.delete(key);
+  }
 }
 
 type PiSessionProviderMetadata = Pick<
@@ -375,6 +398,7 @@ async function handleE2eApprovalTurn(
   sessionId: string,
   promptText: string,
   cwd: string,
+  collector: PiSessionEvent[],
 ): Promise<PiSessionSendResult | null> {
   const fixture = resolveE2eApprovalFixture(promptText);
   if (!fixture) return null;
@@ -382,82 +406,49 @@ async function handleE2eApprovalTurn(
   const input = { path: fixture.path, content: fixture.content };
   const toolName = "write_file";
   const nativeToolName = "write";
-  const approved = await requestToolApproval(
-    sessionId,
-    toolName,
-    fixture.toolCallId,
+  pendingE2eApprovalTurns.set(e2eApprovalKey(sessionId, fixture.toolCallId), {
+    cwd,
+    fixture,
     input,
-  );
+    nativeToolName,
+    toolName,
+  });
 
-  let finalStatus: PiSession["status"] = "idle";
-  if (approved) {
-    try {
-      const { executeAgentTool, grantAgentTool } = await import(
-        "../bridge/pi-tools"
-      );
-      await grantAgentTool(sessionId, fixture.toolCallId, nativeToolName);
-      const result = await executeAgentTool({
-        sessionId,
-        toolCallId: fixture.toolCallId,
-        toolName: nativeToolName,
-        cwd,
-        input,
-      });
-      emitEvent(sessionId, {
-        id: nextPiEventId(),
-        type: PI_SESSION_EVENT.ToolResult,
-        sessionId,
-        createdAt: new Date().toISOString(),
-        payload: {
-          toolCallId: fixture.toolCallId,
-          toolName,
-          input,
-          output: {
-            content: nativeToolResultText(result),
-            details: result.details ?? null,
-          },
-        },
-      });
-      emitEvent(sessionId, {
-        id: nextPiEventId(),
-        type: PI_SESSION_EVENT.OutputText,
-        sessionId,
-        createdAt: new Date().toISOString(),
-        payload: { text: fixture.followUp },
-      });
-    } catch (error) {
-      finalStatus = "error";
-      emitEvent(sessionId, {
-        id: nextPiEventId(),
-        type: PI_SESSION_EVENT.Error,
-        sessionId,
-        createdAt: new Date().toISOString(),
-        payload: { message: String(error) },
-      });
-    }
-  } else {
-    emitEvent(sessionId, {
+  const now = new Date().toISOString();
+  emitEvent(
+    sessionId,
+    {
       id: nextPiEventId(),
       type: PI_SESSION_EVENT.OutputText,
       sessionId,
-      createdAt: new Date().toISOString(),
-      payload: { text: fixture.followUp },
-    });
-  }
-
-  emitEvent(sessionId, {
-    id: nextPiEventId(),
-    type: PI_SESSION_EVENT.Status,
+      createdAt: now,
+      payload: { text: "I need approval to write the e2e fixture." },
+    },
+    collector,
+  );
+  emitEvent(
     sessionId,
-    createdAt: new Date().toISOString(),
-    payload: { status: finalStatus },
-  });
+    {
+      id: nextPiEventId(),
+      type: PI_SESSION_EVENT.ToolApprovalRequested,
+      sessionId,
+      createdAt: now,
+      payload: {
+        toolCallId: fixture.toolCallId,
+        approvalId: fixture.toolCallId,
+        toolName,
+        input,
+      },
+    },
+    collector,
+  );
+
   const session = updateSession(sessionId, {
-    status: finalStatus,
+    status: "running",
     lastPrompt: promptText,
   });
-  await persistSession(session, []);
-  return { accepted: true, session, events: [] };
+  await persistSession(session, collector);
+  return { accepted: true, session, events: collector };
 }
 
 export async function webviewSessionCreate(
@@ -640,6 +631,7 @@ export async function webviewSessionSend(
     sessionId,
     promptText,
     record.session.cwd ?? "/",
+    turnCollector,
   );
   if (e2eApprovalResult) return e2eApprovalResult;
 
@@ -1047,6 +1039,7 @@ export async function webviewSessionStop(
   // can resolve after the stop.
   pendingApprovals.clearForSession(sessionId);
   pendingQuestions.clearForSession(sessionId);
+  clearPendingE2eApprovalTurnsForSession(sessionId);
   // Drop any recorded single-use approval grants on the Rust side so they don't
   // linger past teardown (best effort — never blocks the stop).
   invoke("pi_agent_session_forget", { sessionId }).catch(() => {});
@@ -1105,6 +1098,7 @@ export async function webviewSessionDelete(
   // Deny any tool awaiting approval / cancel any question before teardown.
   pendingApprovals.clearForSession(sessionId);
   pendingQuestions.clearForSession(sessionId);
+  clearPendingE2eApprovalTurnsForSession(sessionId);
   sessions.delete(sessionId);
 
   // Remove the durable transcript blob and any Rust-side approval grants
@@ -1169,13 +1163,13 @@ export async function webviewSessionToolRespond(
   approved: boolean,
 ): Promise<{ session: PiSession; events: PiSessionEvent[] }> {
   pendingApprovals.respond(sessionId, toolCallId, approved);
-  const session = updateSession(sessionId, {});
+  const now = new Date().toISOString();
   const events: PiSessionEvent[] = [
     {
       id: nextPiEventId(),
       type: PI_SESSION_EVENT.ToolApprovalResponded,
       sessionId,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
       payload: {
         toolCallId,
         approvalId: toolCallId,
@@ -1183,6 +1177,80 @@ export async function webviewSessionToolRespond(
       },
     },
   ];
+
+  const pendingE2eTurn = pendingE2eApprovalTurns.get(
+    e2eApprovalKey(sessionId, toolCallId),
+  );
+  pendingE2eApprovalTurns.delete(e2eApprovalKey(sessionId, toolCallId));
+
+  if (pendingE2eTurn) {
+    let finalStatus: PiSession["status"] = "idle";
+    if (approved) {
+      try {
+        const { executeAgentTool, grantAgentTool } = await import(
+          "../bridge/pi-tools"
+        );
+        await grantAgentTool(
+          sessionId,
+          toolCallId,
+          pendingE2eTurn.nativeToolName,
+        );
+        const result = await executeAgentTool({
+          sessionId,
+          toolCallId,
+          toolName: pendingE2eTurn.nativeToolName,
+          cwd: pendingE2eTurn.cwd,
+          input: pendingE2eTurn.input,
+        });
+        events.push({
+          id: nextPiEventId(),
+          type: PI_SESSION_EVENT.ToolResult,
+          sessionId,
+          createdAt: new Date().toISOString(),
+          payload: {
+            toolCallId,
+            toolName: pendingE2eTurn.toolName,
+            input: pendingE2eTurn.input,
+            output: {
+              content: nativeToolResultText(result),
+              details: result.details ?? null,
+            },
+          },
+        });
+      } catch (error) {
+        finalStatus = "error";
+        events.push({
+          id: nextPiEventId(),
+          type: PI_SESSION_EVENT.Error,
+          sessionId,
+          createdAt: new Date().toISOString(),
+          payload: { message: String(error) },
+        });
+      }
+    }
+
+    events.push(
+      {
+        id: nextPiEventId(),
+        type: PI_SESSION_EVENT.OutputText,
+        sessionId,
+        createdAt: new Date().toISOString(),
+        payload: { text: pendingE2eTurn.fixture.followUp },
+      },
+      {
+        id: nextPiEventId(),
+        type: PI_SESSION_EVENT.Status,
+        sessionId,
+        createdAt: new Date().toISOString(),
+        payload: { status: finalStatus },
+      },
+    );
+    const session = updateSession(sessionId, { status: finalStatus });
+    await persistSession(session, events);
+    return { session, events };
+  }
+
+  const session = updateSession(sessionId, {});
   await persistEvents(events);
   return { session, events };
 }

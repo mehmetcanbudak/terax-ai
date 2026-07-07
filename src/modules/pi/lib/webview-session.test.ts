@@ -52,6 +52,12 @@ vi.mock("@/modules/pi/bridge/pi-tools", () => ({
   },
 }));
 
+function enableE2eMockFlag() {
+  vi.stubGlobal("localStorage", {
+    getItem: vi.fn((key: string) => (key === "terax.e2e" ? "1" : null)),
+  });
+}
+
 // ─── Tests ───
 
 describe("Pi webview session backend", () => {
@@ -213,20 +219,58 @@ describe("Pi webview session backend", () => {
       expect(sent).toContain("fix the bug");
     });
 
-    it("routes the e2e approval fixture through the Rust executor when approved", async () => {
+    it("ignores the e2e approval fixture unless mock mode is enabled", async () => {
       const { session } = await webviewSession.webviewSessionCreate(
-        "E2E Approve",
+        "E2E Disabled",
         "/workspace",
       );
-      const send = webviewSession.webviewSessionSend(
+      const agent = await mockCreateTauriAgent.mock.results[0].value;
+      agent.prompt.mockResolvedValue(undefined);
+      agent.subscribe.mockImplementation(
+        (cb: (e: unknown, s: unknown) => void) => {
+          cb({ type: "agent_end", messages: [] }, {});
+          return vi.fn();
+        },
+      );
+
+      await webviewSession.webviewSessionSend(
         session.id,
         "[terax-e2e-pi-approval-approved] write the fixture",
         null,
       );
 
-      await vi.waitFor(() => {
-        expect(mockEmit).toHaveBeenCalledWith(
-          "pi:session-event",
+      expect(agent.prompt).toHaveBeenCalled();
+      expect(mockExecuteAgentTool).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the e2e approval fixture without waiting for a response", async () => {
+      enableE2eMockFlag();
+      const { session } = await webviewSession.webviewSessionCreate(
+        "E2E Pending",
+        "/workspace",
+      );
+
+      const result = await Promise.race([
+        webviewSession.webviewSessionSend(
+          session.id,
+          "[terax-e2e-pi-approval-approved] write the fixture",
+          null,
+        ),
+        new Promise<"timeout">((resolve) =>
+          setTimeout(() => resolve("timeout"), 0),
+        ),
+      ]);
+
+      expect(result).not.toBe("timeout");
+      if (result === "timeout") return;
+      expect(result.session.status).toBe("running");
+      expect(result.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: PI_SESSION_EVENT.Input }),
+          expect.objectContaining({
+            type: PI_SESSION_EVENT.Status,
+            payload: { status: "running" },
+          }),
           expect.objectContaining({
             type: PI_SESSION_EVENT.ToolApprovalRequested,
             payload: expect.objectContaining({
@@ -234,15 +278,52 @@ describe("Pi webview session backend", () => {
               toolName: "write_file",
             }),
           }),
-        );
-      });
-      await webviewSession.webviewSessionToolRespond(
+        ]),
+      );
+      expect(mockGrantAgentTool).not.toHaveBeenCalled();
+      expect(mockExecuteAgentTool).not.toHaveBeenCalled();
+    });
+
+    it("routes the e2e approval fixture through the Rust executor when approved", async () => {
+      enableE2eMockFlag();
+      const { session } = await webviewSession.webviewSessionCreate(
+        "E2E Approve",
+        "/workspace",
+      );
+      const sendResult = await webviewSession.webviewSessionSend(
+        session.id,
+        "[terax-e2e-pi-approval-approved] write the fixture",
+        null,
+      );
+
+      expect(sendResult.session.status).toBe("running");
+      expect(sendResult.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: PI_SESSION_EVENT.ToolApprovalRequested,
+            payload: expect.objectContaining({
+              toolCallId: "e2e-pi-write-approved",
+              toolName: "write_file",
+            }),
+          }),
+        ]),
+      );
+      expect(mockEmit).toHaveBeenCalledWith(
+        "pi:session-event",
+        expect.objectContaining({
+          type: PI_SESSION_EVENT.ToolApprovalRequested,
+          payload: expect.objectContaining({
+            toolCallId: "e2e-pi-write-approved",
+            toolName: "write_file",
+          }),
+        }),
+      );
+
+      const result = await webviewSession.webviewSessionToolRespond(
         session.id,
         "e2e-pi-write-approved",
         true,
       );
-
-      const result = await send;
 
       expect(result.session.status).toBe("idle");
       expect(mockGrantAgentTool).toHaveBeenCalledWith(
@@ -260,29 +341,31 @@ describe("Pi webview session backend", () => {
           content: "approved through Rust pi_agent_tool_execute\n",
         },
       });
-      expect(mockEmit).toHaveBeenCalledWith(
-        "pi:session-event",
-        expect.objectContaining({
-          type: PI_SESSION_EVENT.OutputText,
-          payload: { text: "Mock pi tool follow-up: write completed." },
-        }),
+      expect(result.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: PI_SESSION_EVENT.OutputText,
+            payload: { text: "Mock pi tool follow-up: write completed." },
+          }),
+        ]),
       );
     });
 
     it("does not execute the e2e approval fixture when denied", async () => {
+      enableE2eMockFlag();
       const { session } = await webviewSession.webviewSessionCreate(
         "E2E Deny",
         "/workspace",
       );
-      const send = webviewSession.webviewSessionSend(
+      const sendResult = await webviewSession.webviewSessionSend(
         session.id,
         "[terax-e2e-pi-approval-denied] write the fixture",
         null,
       );
 
-      await vi.waitFor(() => {
-        expect(mockEmit).toHaveBeenCalledWith(
-          "pi:session-event",
+      expect(sendResult.session.status).toBe("running");
+      expect(sendResult.events).toEqual(
+        expect.arrayContaining([
           expect.objectContaining({
             type: PI_SESSION_EVENT.ToolApprovalRequested,
             payload: expect.objectContaining({
@@ -290,25 +373,35 @@ describe("Pi webview session backend", () => {
               toolName: "write_file",
             }),
           }),
-        );
-      });
-      await webviewSession.webviewSessionToolRespond(
+        ]),
+      );
+      expect(mockEmit).toHaveBeenCalledWith(
+        "pi:session-event",
+        expect.objectContaining({
+          type: PI_SESSION_EVENT.ToolApprovalRequested,
+          payload: expect.objectContaining({
+            toolCallId: "e2e-pi-write-denied",
+            toolName: "write_file",
+          }),
+        }),
+      );
+
+      const result = await webviewSession.webviewSessionToolRespond(
         session.id,
         "e2e-pi-write-denied",
         false,
       );
 
-      const result = await send;
-
       expect(result.session.status).toBe("idle");
       expect(mockGrantAgentTool).not.toHaveBeenCalled();
       expect(mockExecuteAgentTool).not.toHaveBeenCalled();
-      expect(mockEmit).toHaveBeenCalledWith(
-        "pi:session-event",
-        expect.objectContaining({
-          type: PI_SESSION_EVENT.OutputText,
-          payload: { text: "Mock pi tool follow-up: write denied." },
-        }),
+      expect(result.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: PI_SESSION_EVENT.OutputText,
+            payload: { text: "Mock pi tool follow-up: write denied." },
+          }),
+        ]),
       );
     });
 
