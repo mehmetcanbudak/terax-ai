@@ -41,6 +41,8 @@ export const REQUIRED_CI_RELEASE_GATES = [
   },
   { label: "Linux WebKit driver", text: "webkit2gtk-driver" },
   { label: "Tauri driver", text: "tauri-driver" },
+  { label: "Linux e2e visible window override", text: "TAURI_CONFIG" },
+  { label: "Linux e2e visible main window", text: "\"visible\":true" },
   { label: "Linux e2e", text: "xvfb-run -a pnpm e2e" },
   { label: "Rust coverage", text: "cargo llvm-cov nextest --locked --lcov --output-path lcov.info" },
 ];
