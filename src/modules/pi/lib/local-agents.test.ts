@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { execPath } from "node:process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -15,6 +16,10 @@ import {
 } from "./local-agents";
 
 const execFileAsync = promisify(execFile);
+
+function quotePosix(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 describe("Pi local agent catalog", () => {
   it("tracks the supported CLI agents with safe visible defaults", () => {
@@ -120,11 +125,9 @@ describe("Pi local agent catalog", () => {
     expect(command).not.toBeNull();
 
     const root = await mkdtemp(join(tmpdir(), "terax-opencode-launch-"));
-    const binDir = join(root, "bin");
     const originalHome = join(root, "real-home");
     const capturePath = join(root, "capture.json");
     const captureScript = join(root, "capture.mjs");
-    await mkdir(binDir, { recursive: true });
     await mkdir(join(originalHome, ".local", "share", "opencode"), {
       recursive: true,
     });
@@ -136,20 +139,18 @@ describe("Pi local agent catalog", () => {
       captureScript,
       `import { writeFileSync } from "node:fs";\nwriteFileSync(process.env.OPENCODE_CAPTURE_FILE, JSON.stringify({ argv: process.argv.slice(2), env: { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME, XDG_STATE_HOME: process.env.XDG_STATE_HOME, XDG_DATA_HOME: process.env.XDG_DATA_HOME, OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR, OPENCODE_DISABLE_PROJECT_CONFIG: process.env.OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE: process.env.OPENCODE_DISABLE_CLAUDE_CODE, OPENCODE_DISABLE_AUTOUPDATE: process.env.OPENCODE_DISABLE_AUTOUPDATE, OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT } }, null, 2));\n`,
     );
-    await writeFile(
-      join(binDir, "opencode"),
-      '#!/bin/sh\nexec node "$OPENCODE_CAPTURE_SCRIPT" "$@"\n',
-      { mode: 0o755 },
+    const executableCommand = command!.replace(
+      "opencode --pure",
+      `${quotePosix(execPath)} ${quotePosix(captureScript)} --pure`,
     );
+    expect(executableCommand).not.toBe(command);
 
-    await execFileAsync("bash", ["-c", command!], {
+    await execFileAsync("bash", ["-c", executableCommand], {
       cwd: root,
       env: {
         ...process.env,
         HOME: originalHome,
         OPENCODE_CAPTURE_FILE: capturePath,
-        OPENCODE_CAPTURE_SCRIPT: captureScript,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
       },
     });
 
