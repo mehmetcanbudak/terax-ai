@@ -76,14 +76,17 @@ sudo apt-get install -y webkit2gtk-driver xvfb
 # build the frontend and the release binary the driver will launch
 pnpm install
 pnpm build
-cargo build --release --manifest-path src-tauri/Cargo.toml
+export TAURI_CONFIG='{"app":{"windows":[{"label":"main","title":"Terax","width":800,"height":600,"minWidth":420,"minHeight":280,"decorations":false,"transparent":true,"visible":true,"dragDropEnabled":true}]}}'
+pnpm tauri build --ci --no-bundle --config "$TAURI_CONFIG"
 
 # run the specs (headless)
 xvfb-run -a pnpm e2e
 ```
 
 `pnpm e2e` runs `wdio run ./wdio.conf.mjs`. The config spawns `tauri-driver`
-itself and points the session at `src-tauri/target/release/terax`.
+itself and points the session at `src-tauri/target/release/terax`. Build the
+binary through the Tauri CLI so the production frontend assets are embedded;
+plain `cargo build --release` can leave the app pointed at the dev server.
 
 ## Adding a spec
 

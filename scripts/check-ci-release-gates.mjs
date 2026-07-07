@@ -41,6 +41,7 @@ export const REQUIRED_CI_RELEASE_GATES = [
   },
   { label: "Linux WebKit driver", text: "webkit2gtk-driver" },
   { label: "Tauri driver", text: "tauri-driver" },
+  { label: "Linux e2e Tauri production build", text: "pnpm tauri build --ci --no-bundle --config" },
   { label: "Linux e2e visible window override", text: "TAURI_CONFIG" },
   { label: "Linux e2e visible main window", text: "\"visible\":true" },
   { label: "Linux e2e WebKit software renderer", text: "WEBKIT_DISABLE_DMABUF_RENDERER" },
