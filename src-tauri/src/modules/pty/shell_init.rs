@@ -897,6 +897,7 @@ mod windows {
             }
             format!("rename {} -> {}: {e}", tmp.display(), path.display())
         })?;
+        Ok(())
     }
 
     #[cfg(test)]

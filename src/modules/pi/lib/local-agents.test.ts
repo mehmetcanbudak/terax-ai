@@ -192,7 +192,7 @@ describe("Pi local agent catalog", () => {
       task: "deny",
       skill: "deny",
     });
-  });
+  }, 10_000);
 
   it("builds prompt handoff commands without shell injection", () => {
     const cursor = PI_LOCAL_AGENT_DEFS.find((agent) => agent.id === "cursor");

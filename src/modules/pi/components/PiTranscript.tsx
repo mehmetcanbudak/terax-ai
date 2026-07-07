@@ -7,7 +7,7 @@ import CheckmarkCircle01Icon from "@hugeicons/core-free-icons/CheckmarkCircle01I
 import Copy01Icon from "@hugeicons/core-free-icons/Copy01Icon";
 import File01Icon from "@hugeicons/core-free-icons/File01Icon";
 import Folder01Icon from "@hugeicons/core-free-icons/Folder01Icon";
-import FullscreenIcon from "@hugeicons/core-free-icons/FullscreenIcon";
+import FullscreenIcon from "@hugeicons/core-free-icons/FullScreenIcon";
 import IncognitoIcon from "@hugeicons/core-free-icons/IncognitoIcon";
 import Speaker01Icon from "@hugeicons/core-free-icons/Speaker01Icon";
 import StopCircleIcon from "@hugeicons/core-free-icons/StopCircleIcon";

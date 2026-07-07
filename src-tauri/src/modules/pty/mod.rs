@@ -243,16 +243,31 @@ pub fn pty_has_foreground_job(state: tauri::State<PtyState>, id: u32) -> Result<
 fn shell_has_children(shell_pid: u32) -> bool {
     std::fs::read_dir("/proc")
         .map(|entries| {
-            entries.any(|e| {
-                let name = e.ok()?.file_name();
-                let child_pid: u32 = name.to_string_lossy().parse().ok()?;
+            entries.any(|entry| {
+                let Ok(entry) = entry else {
+                    return false;
+                };
+                let name = entry.file_name();
+                let Ok(child_pid) = name.to_string_lossy().parse::<u32>() else {
+                    return false;
+                };
                 if child_pid == shell_pid {
-                    return Some(false);
+                    return false;
                 }
-                let stat = std::fs::read_to_string(format!("/proc/{}/stat", child_pid)).ok()?;
-                let rest = stat.rsplit(')').next()?;
-                let ppid: u32 = rest.split_whitespace().nth(1)?.parse().ok()?;
-                Some(ppid == shell_pid)
+                let Ok(stat) = std::fs::read_to_string(format!("/proc/{child_pid}/stat")) else {
+                    return false;
+                };
+                let Some(rest) = stat.rsplit(')').next() else {
+                    return false;
+                };
+                let Some(ppid) = rest
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|value| value.parse::<u32>().ok())
+                else {
+                    return false;
+                };
+                ppid == shell_pid
             })
         })
         .unwrap_or(false)

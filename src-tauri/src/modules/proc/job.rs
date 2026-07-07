@@ -19,6 +19,8 @@ pub struct PtyJob {
     handle: HANDLE,
 }
 
+pub type ProcessJob = PtyJob;
+
 // SAFETY: `PtyJob` has unique ownership of a Windows Job HANDLE. Handles are
 // reference-counted kernel objects that may be closed from any thread, and this
 // type exposes no interior access other than dropping the owned handle.
