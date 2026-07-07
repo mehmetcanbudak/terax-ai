@@ -242,7 +242,7 @@ pub fn pty_has_foreground_job(state: tauri::State<PtyState>, id: u32) -> Result<
 #[cfg(all(unix, target_os = "linux"))]
 fn shell_has_children(shell_pid: u32) -> bool {
     std::fs::read_dir("/proc")
-        .map(|entries| {
+        .map(|mut entries| {
             entries.any(|entry| {
                 let Ok(entry) = entry else {
                     return false;
