@@ -31,6 +31,76 @@ const application = resolve(
 
 let tauriDriver;
 
+const driverEnv = {
+  ...process.env,
+  TERAX_E2E: "1",
+  // WebKitGTK 2.50+ can open a blank automation page under Xvfb when the
+  // DMABuf renderer is enabled without a real GPU/DRM device. Keep CI on the
+  // deterministic X11 software-rendered path.
+  ...(process.platform === "linux"
+    ? {
+        GDK_BACKEND: "x11",
+        NO_AT_BRIDGE: "1",
+        WEBKIT_DISABLE_DMABUF_RENDERER: "1",
+      }
+    : {}),
+};
+
+async function collectPageState(activeBrowser, handle = undefined) {
+  if (handle) {
+    await activeBrowser.switchToWindow(handle);
+  }
+
+  const [url, title, source] = await Promise.all([
+    activeBrowser.getUrl().catch((error) => `<url error: ${error}>`),
+    activeBrowser.getTitle().catch((error) => `<title error: ${error}>`),
+    activeBrowser
+      .getPageSource()
+      .catch((error) => `<source error: ${error}>`),
+  ]);
+
+  return { handle, url, title, source };
+}
+
+function isAppPage(state) {
+  return (
+    state.title === "Terax" ||
+    state.source.includes('id="root"') ||
+    state.source.includes('data-testid="tab-bar"')
+  );
+}
+
+async function selectAppWindow(activeBrowser) {
+  const deadline = Date.now() + 15000;
+  let lastStates = [];
+
+  while (Date.now() < deadline) {
+    const handles = await activeBrowser.getWindowHandles();
+    lastStates = [];
+
+    for (const handle of handles) {
+      const state = await collectPageState(activeBrowser, handle);
+      lastStates.push(state);
+      if (isAppPage(state)) {
+        return;
+      }
+    }
+
+    await activeBrowser.pause(500);
+  }
+
+  console.warn(
+    `[e2e diagnostics] no app window found: ${lastStates
+      .map(
+        (state) =>
+          `${state.handle ?? "<current>"} url=${state.url} title=${JSON.stringify(
+            state.title,
+          )} source=${state.source.slice(0, 300)}`,
+      )
+      .join(" | ")}`,
+  );
+}
+
 export const config = {
   hostname: "127.0.0.1",
   port: 4444,
@@ -81,8 +151,38 @@ export const config = {
    */
   beforeSession() {
     tauriDriver = spawn("tauri-driver", [], {
+      env: driverEnv,
       stdio: [null, process.stdout, process.stderr],
     });
+  },
+
+  async before() {
+    const activeBrowser = globalThis.browser;
+    if (activeBrowser) {
+      await selectAppWindow(activeBrowser);
+    }
+  },
+
+  async afterTest(_test, _context, { passed }) {
+    if (passed) {
+      return;
+    }
+
+    const activeBrowser = globalThis.browser;
+    if (!activeBrowser) {
+      return;
+    }
+
+    try {
+      const state = await collectPageState(activeBrowser);
+      console.warn(
+        `[e2e diagnostics] url=${state.url} title=${JSON.stringify(
+          state.title,
+        )} source=${state.source.slice(0, 500)}`,
+      );
+    } catch (error) {
+      console.warn(`[e2e diagnostics] failed to collect page state: ${error}`);
+    }
   },
 
   afterSession() {

@@ -222,6 +222,14 @@ pub fn run() {
 
     if let Err(error) = builder
         .setup(|_app| {
+            if std::env::var_os("TERAX_E2E").is_some() {
+                if let Some(main) = _app.get_webview_window("main") {
+                    if let Err(error) = main.show() {
+                        log::warn!("e2e main window show failed: {error}");
+                    }
+                }
+            }
+
             #[cfg(all(target_os = "macos", feature = "openclicky"))]
             if let Err(e) = tray::setup_tray(_app.handle()) {
                 log::warn!("tray setup failed (non-fatal, continuing with dock icon): {e}");
