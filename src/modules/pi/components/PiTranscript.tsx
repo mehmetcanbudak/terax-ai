@@ -386,6 +386,7 @@ function ToolApprovalPanel({
           size="xs"
           variant="outline"
           className="h-6 px-2 text-[10.5px]"
+          data-testid="pi-tool-approval-deny"
           disabled={!onToolApproval}
           onClick={() => onToolApproval?.(toolCallId, false)}
         >
@@ -395,6 +396,7 @@ function ToolApprovalPanel({
           type="button"
           size="xs"
           className="h-6 px-2 text-[10.5px]"
+          data-testid="pi-tool-approval-approve"
           disabled={!onToolApproval}
           onClick={() => onToolApproval?.(toolCallId, true)}
         >

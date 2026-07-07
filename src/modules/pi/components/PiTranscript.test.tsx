@@ -240,6 +240,8 @@ describe("PiTranscript", () => {
     );
 
     expect(html).toContain("Run shell command needs approval");
+    expect(html).toContain('data-testid="pi-tool-approval-deny"');
+    expect(html).toContain('data-testid="pi-tool-approval-approve"');
     expect(html).toContain("Deny");
     expect(html).toContain("Approve");
     expect(html).not.toContain("Approval actions are unavailable");

@@ -26,16 +26,16 @@ function resetFixtures() {
   rmSync(deniedPath, { force: true });
 }
 
-async function waitForBodyText(text, timeout = 30000) {
+async function waitForDocumentText(text, timeout = 30000) {
   await browser.waitUntil(
     async () =>
       browser.execute(
-        (expected) => document.body.innerText.includes(expected),
+        (expected) => document.body.textContent?.includes(expected) ?? false,
         text,
       ),
     {
       timeout,
-      timeoutMsg: `body text did not include ${JSON.stringify(text)}`,
+      timeoutMsg: `document text did not include ${JSON.stringify(text)}`,
     },
   );
 }
@@ -132,8 +132,12 @@ async function sendPiPrompt(text) {
 }
 
 async function respondToLatestApproval(label) {
-  await waitForBodyText("needs approval", 20000);
-  const button = await browser.$(`//button[normalize-space(.)="${label}"]`);
+  await waitForDocumentText("needs approval", 20000);
+  const testId =
+    label === "Approve" ? "pi-tool-approval-approve" : "pi-tool-approval-deny";
+  const button = await browser.$(`[data-testid="${testId}"]`);
+  await button.waitForExist({ timeout: 15000 });
+  await button.scrollIntoView({ block: "center", inline: "nearest" });
   await button.waitForClickable({ timeout: 15000 });
   await button.click();
 }
@@ -160,7 +164,7 @@ describe("pi tool approvals (mock provider)", () => {
     });
     expect(readFileSync(approvedPath, "utf8")).toBe(APPROVED_CONTENT);
 
-    await waitForBodyText("Mock pi tool follow-up: write completed", 20000);
+    await waitForDocumentText("Mock pi tool follow-up: write completed", 20000);
   });
 
   it("does not execute a denied write", async () => {
@@ -168,7 +172,7 @@ describe("pi tool approvals (mock provider)", () => {
     await sendPiPrompt(DENY_PROMPT);
     await respondToLatestApproval("Deny");
 
-    await waitForBodyText("Mock pi tool follow-up: write denied", 20000);
+    await waitForDocumentText("Mock pi tool follow-up: write denied", 20000);
 
     expect(existsSync(deniedPath)).toBe(false);
     if (existsSync(deniedPath)) {

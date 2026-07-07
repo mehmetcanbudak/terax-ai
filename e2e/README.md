@@ -96,6 +96,7 @@ plain `cargo build --release` can leave the app pointed at the dev server.
 2. Prefer stable `data-testid` hooks over class names. Existing hooks:
    `tab-bar`, `new-tab-button`, `new-tab-terminal`, `terminal-pane`,
    `cwd-breadcrumb`, `command-palette-input`, `ai-composer-input`,
-   `pi-e2e-state`, `pi-create-session-button`, `pi-new-session-button`.
+   `pi-e2e-state`, `pi-create-session-button`, `pi-new-session-button`,
+   `pi-tool-approval-approve`, `pi-tool-approval-deny`.
 3. Keep specs free of AI providers, secrets, and network so they stay
    deterministic in CI.
