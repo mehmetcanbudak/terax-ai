@@ -135,11 +135,31 @@ async function respondToLatestApproval(label) {
   await waitForDocumentText("needs approval", 20000);
   const testId =
     label === "Approve" ? "pi-tool-approval-approve" : "pi-tool-approval-deny";
-  const button = await browser.$(`[data-testid="${testId}"]`);
-  await button.waitForExist({ timeout: 15000 });
-  await button.scrollIntoView({ block: "center", inline: "nearest" });
-  await button.waitForClickable({ timeout: 15000 });
-  await button.click();
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (approvalTestId) =>
+          document.querySelectorAll(`[data-testid="${approvalTestId}"]`).length >
+          0,
+        testId,
+      ),
+    {
+      timeout: 15000,
+      timeoutMsg: `${label} approval control did not render`,
+    },
+  );
+
+  await browser.execute((approvalTestId) => {
+    const buttons = Array.from(
+      document.querySelectorAll(`[data-testid="${approvalTestId}"]`),
+    );
+    const button = buttons.at(-1);
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error(`Approval button not found: ${approvalTestId}`);
+    }
+    button.scrollIntoView({ block: "center", inline: "nearest" });
+    button.click();
+  }, testId);
 }
 
 describe("pi tool approvals (mock provider)", () => {
