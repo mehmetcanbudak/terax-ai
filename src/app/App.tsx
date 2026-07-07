@@ -34,6 +34,7 @@ import {
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
+import { PiPanelLazy } from "@/modules/pi/PiPanelLazy";
 import {
   Header,
   type SearchInlineHandle,
@@ -99,6 +100,8 @@ import { WorkspaceSurface } from "./components/WorkspaceSurface";
 import { useAppCloseGuard } from "./hooks/useAppCloseGuard";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
+
+const CODE_SIDEBAR_ITEMS = [{ id: "code", label: "Code" }] as const;
 
 export default function App() {
   const {
@@ -581,6 +584,8 @@ export default function App() {
     }
     return null;
   })();
+  const activeTerminalPrivate =
+    activeTab?.kind === "terminal" && activeTab.private === true;
   const explorerActiveFilePath =
     activeTab?.kind === "editor" || activeTab?.kind === "markdown"
       ? activeTab.path
@@ -1202,6 +1207,32 @@ export default function App() {
                   />
                 </div>
               </ResizablePanel>
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                id="code-sidebar"
+                defaultSize="260px"
+                minSize="220px"
+                maxSize="480px"
+                collapsible
+                collapsedSize={0}
+              >
+                <div className="flex h-full min-h-0 flex-col border-l border-border/60 bg-card">
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    <PiPanelLazy
+                      activeCwd={activeCwd}
+                      activeFile={activeFilePath}
+                      activeTerminalPrivate={activeTerminalPrivate}
+                      surfaceLabel="Code"
+                      workspaceRoot={explorerRoot}
+                    />
+                  </div>
+                  <SidebarRail
+                    activeView="code"
+                    items={CODE_SIDEBAR_ITEMS}
+                    onSelectView={() => {}}
+                  />
+                </div>
+              </ResizablePanel>
             </ResizablePanelGroup>
           </main>
 
@@ -1214,9 +1245,7 @@ export default function App() {
               onWorkspaceChange={handleWorkspaceChange}
               onOpenMini={openMini}
               hasComposer={hasComposer}
-              privateActive={
-                activeTab?.kind === "terminal" && activeTab.private === true
-              }
+              privateActive={activeTerminalPrivate}
             />
           )}
 

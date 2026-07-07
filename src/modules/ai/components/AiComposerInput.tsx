@@ -212,6 +212,7 @@ export function AiComposerInput() {
           <div className="flex items-start gap-2">
             <textarea
               ref={c.textareaRef}
+              data-testid="ai-composer-input"
               value={c.value}
               onChange={(e) => c.setValue(e.target.value)}
               onKeyUp={updateTrigger}

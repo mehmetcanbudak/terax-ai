@@ -227,6 +227,7 @@ export function CommandPalette({
       >
         <CommandInput
           id="terax-command-palette-input"
+          data-testid="command-palette-input"
           value={query}
           onValueChange={setQuery}
           placeholder={placeholder}

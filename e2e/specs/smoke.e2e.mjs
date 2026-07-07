@@ -5,7 +5,13 @@
  * but crashes on boot (bad asset path, panicking setup hook, broken provider
  * tree). It needs no AI provider, no secrets, and no network.
  */
+import { basename } from "node:path";
 import { browser, expect } from "@wdio/globals";
+
+const expectedProjectTitle = basename(process.cwd());
+const expectedProjectPrefix = `${expectedProjectTitle} ${String.fromCharCode(
+  0x2014,
+)} `;
 
 describe("app smoke", () => {
   it("mounts the React root", async () => {
@@ -21,8 +27,21 @@ describe("app smoke", () => {
     );
   });
 
-  it("shows the Terax window title", async () => {
-    await expect(browser).toHaveTitle("Terax");
+  it("shows the workspace window title", async () => {
+    await browser.waitUntil(
+      async () => {
+        const title = await browser.getTitle();
+        return (
+          title === "Terax" ||
+          title === expectedProjectTitle ||
+          title.startsWith(expectedProjectPrefix)
+        );
+      },
+      {
+        timeout: 15000,
+        timeoutMsg: "window title did not match app or workspace title",
+      },
+    );
   });
 
   it("renders the tab bar and a terminal pane on first boot", async () => {

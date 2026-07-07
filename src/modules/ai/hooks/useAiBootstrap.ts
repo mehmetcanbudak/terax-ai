@@ -7,6 +7,7 @@ import {
   getAllKeys,
   hasAnyKey,
 } from "../lib/keyring";
+import { E2E_MOCK_MODEL_ID, isE2eMockEnabled } from "../lib/mockFlags";
 import { useAgentsStore } from "../store/agentsStore";
 import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
@@ -54,7 +55,8 @@ export function useAiBootstrap(): {
     customEndpoints.some(
       (e) => e.baseURL.trim().length > 0 && e.modelId.trim().length > 0,
     );
-  const hasComposer = hasAnyKey(apiKeys) || hasLocalModel;
+  const e2eMockEnabled = isE2eMockEnabled();
+  const hasComposer = e2eMockEnabled || hasAnyKey(apiKeys) || hasLocalModel;
 
   const prefsHydrated = usePreferencesStore((s) => s.hydrated);
   const [keysLoaded, setKeysLoaded] = useState(false);
@@ -91,8 +93,8 @@ export function useAiBootstrap(): {
   }, [initPrefs]);
   useEffect(() => {
     if (!prefsHydrated) return;
-    setSelectedModelId(prefDefaultModel);
-  }, [prefsHydrated, prefDefaultModel, setSelectedModelId]);
+    setSelectedModelId(e2eMockEnabled ? E2E_MOCK_MODEL_ID : prefDefaultModel);
+  }, [e2eMockEnabled, prefsHydrated, prefDefaultModel, setSelectedModelId]);
 
   useEffect(() => {
     void hydrateSessions();

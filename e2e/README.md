@@ -21,8 +21,9 @@ truth for execution.
 
 Golden flows that need no AI provider, secrets, or network:
 
-- `smoke.e2e.mjs` - the app boots, the React root renders, the window title is
-  `Terax`, and the tab bar plus a terminal pane mount on first launch.
+- `smoke.e2e.mjs` - the app boots, the React root renders, the app or
+  workspace title is shown, and the tab bar plus a terminal pane mount on first
+  launch.
 - `tabs.e2e.mjs` - opening a terminal tab from the new-tab menu increases the
   tab count; closing a tab decreases it.
 - `terminal.e2e.mjs` - a PTY-backed xterm mounts, accepts keystrokes through
@@ -94,6 +95,6 @@ plain `cargo build --release` can leave the app pointed at the dev server.
    `specs` glob in `wdio.conf.mjs`).
 2. Prefer stable `data-testid` hooks over class names. Existing hooks:
    `tab-bar`, `new-tab-button`, `new-tab-terminal`, `terminal-pane`,
-   `cwd-breadcrumb`.
+   `cwd-breadcrumb`, `command-palette-input`, `ai-composer-input`.
 3. Keep specs free of AI providers, secrets, and network so they stay
    deterministic in CI.

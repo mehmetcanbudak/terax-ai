@@ -11,7 +11,7 @@
  */
 import { browser, expect } from "@wdio/globals";
 
-const PALETTE_INPUT = 'input[placeholder="Run a command or open a file..."]';
+const PALETTE_INPUT = '[data-testid="command-palette-input"]';
 
 describe("command palette", () => {
   it("opens with Ctrl+Shift+P", async () => {
