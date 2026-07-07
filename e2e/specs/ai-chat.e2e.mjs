@@ -12,6 +12,20 @@
  */
 import { browser, expect } from "@wdio/globals";
 
+async function waitForBodyText(text, timeout = 30000) {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (expected) => document.body.innerText.includes(expected),
+        text,
+      ),
+    {
+      timeout,
+      timeoutMsg: `body text did not include ${JSON.stringify(text)}`,
+    },
+  );
+}
+
 async function enableMockProvider() {
   // The app must be loaded before localStorage has an origin to write to.
   await browser
@@ -55,12 +69,12 @@ describe("ai chat (mock provider)", () => {
     const input = await browser.$('[data-testid="ai-composer-input"]');
     await input.waitForDisplayed({ timeout: 15000 });
     await input.click();
-    await browser.keys("hello from e2e".split(""));
+    await input.setValue("hello from e2e");
     await browser.keys(["Enter"]);
 
     // Submitting auto-opens the mini window, where the mock streams its reply.
-    const reply = await browser.$("*=Mock reply");
-    await reply.waitForExist({ timeout: 30000 });
-    await expect(reply).toBeExisting();
+    await waitForBodyText("Mock reply: hello from the e2e provider.");
+    const bodyText = await browser.execute(() => document.body.innerText);
+    expect(bodyText).toContain("Mock reply");
   });
 });

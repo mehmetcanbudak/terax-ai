@@ -25,6 +25,20 @@ function resetFixtures() {
   rmSync(deniedPath, { force: true });
 }
 
+async function waitForBodyText(text, timeout = 30000) {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (expected) => document.body.innerText.includes(expected),
+        text,
+      ),
+    {
+      timeout,
+      timeoutMsg: `body text did not include ${JSON.stringify(text)}`,
+    },
+  );
+}
+
 async function enableMockPiRuntime() {
   await browser
     .$('[data-testid="terminal-pane"]')
@@ -46,12 +60,17 @@ async function openCodePanel() {
 }
 
 async function waitForPiCreateReady() {
-  const state = await browser.$('[data-testid="pi-e2e-state"]');
-  await state.waitForExist({ timeout: 30000 });
+  await browser
+    .$('[data-testid="pi-e2e-state"]')
+    .waitForExist({ timeout: 30000 });
   await browser.waitUntil(
-    async () =>
-      (await state.getAttribute("data-runtime-ready")) === "true" &&
-      (await state.getAttribute("data-can-create-session")) === "true",
+    async () => {
+      const state = await browser.$('[data-testid="pi-e2e-state"]');
+      return (
+        (await state.getAttribute("data-runtime-ready")) === "true" &&
+        (await state.getAttribute("data-can-create-session")) === "true"
+      );
+    },
     {
       timeout: 60000,
       timeoutMsg: "Pi runtime did not become ready for session creation",
@@ -93,7 +112,7 @@ async function sendPiPrompt(text) {
 }
 
 async function respondToLatestApproval(label) {
-  await browser.$("*=needs approval").waitForExist({ timeout: 20000 });
+  await waitForBodyText("needs approval", 20000);
   const button = await browser.$(`//button[normalize-space(.)="${label}"]`);
   await button.waitForClickable({ timeout: 15000 });
   await button.click();
@@ -121,10 +140,7 @@ describe("pi tool approvals (mock provider)", () => {
     });
     expect(readFileSync(approvedPath, "utf8")).toBe(APPROVED_CONTENT);
 
-    const followUp = await browser.$(
-      "*=Mock pi tool follow-up: write completed",
-    );
-    await followUp.waitForExist({ timeout: 20000 });
+    await waitForBodyText("Mock pi tool follow-up: write completed", 20000);
   });
 
   it("does not execute a denied write", async () => {
@@ -132,8 +148,7 @@ describe("pi tool approvals (mock provider)", () => {
     await sendPiPrompt(DENY_PROMPT);
     await respondToLatestApproval("Deny");
 
-    const followUp = await browser.$("*=Mock pi tool follow-up: write denied");
-    await followUp.waitForExist({ timeout: 20000 });
+    await waitForBodyText("Mock pi tool follow-up: write denied", 20000);
 
     expect(existsSync(deniedPath)).toBe(false);
     if (existsSync(deniedPath)) {

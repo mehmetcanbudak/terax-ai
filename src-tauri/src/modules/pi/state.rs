@@ -39,6 +39,9 @@ impl PiState {
 
     /// The webview agent has no separate runtime to report on; it is always ready.
     pub fn snapshot(&self) -> Result<PiRuntimeSnapshot, String> {
-        Ok(PiRuntimeSnapshot::default())
+        Ok(PiRuntimeSnapshot {
+            phase: PiPhase::Ready,
+            detail: None,
+        })
     }
 }

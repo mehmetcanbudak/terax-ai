@@ -2,6 +2,16 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::local_agents::resolve_local_agent_binary_in_path;
+use super::types::PiPhase;
+use super::PiState;
+
+#[test]
+fn webview_pi_runtime_snapshot_is_ready() {
+    let snapshot = PiState::default().snapshot().unwrap();
+
+    assert_eq!(snapshot.phase, PiPhase::Ready);
+    assert_eq!(snapshot.detail, None);
+}
 
 #[test]
 fn pi_env_api_key_rejects_unsupported_names() {
