@@ -899,6 +899,7 @@ export default function App() {
   ]);
 
   const activeCwd = activeTerminalLeafCwd;
+  const piWorkspaceRoot = explorerRoot ?? activeCwd;
 
   const handleNewSpace = useCallback(() => {
     const { spaces, create, setActive } = useSpaces.getState();
@@ -1223,7 +1224,7 @@ export default function App() {
                       activeFile={activeFilePath}
                       activeTerminalPrivate={activeTerminalPrivate}
                       surfaceLabel="Code"
-                      workspaceRoot={explorerRoot}
+                      workspaceRoot={piWorkspaceRoot}
                     />
                   </div>
                   <SidebarRail

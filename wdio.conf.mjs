@@ -175,10 +175,26 @@ export const config = {
 
     try {
       const state = await collectPageState(activeBrowser);
+      const domState = await activeBrowser
+        .execute(() => ({
+          bodyText: document.body.innerText?.slice(0, 1200) ?? "",
+          chatReady: window.__TERAX_E2E_CHAT_READY__?.() ?? null,
+          e2eFlag: window.localStorage.getItem("terax.e2e"),
+          piState: (() => {
+            const el = document.querySelector('[data-testid="pi-e2e-state"]');
+            if (!(el instanceof HTMLElement)) return null;
+            return {
+              canCreateSession: el.dataset.canCreateSession ?? null,
+              runtimeReady: el.dataset.runtimeReady ?? null,
+              workspaceRoot: el.dataset.workspaceRoot ?? null,
+            };
+          })(),
+        }))
+        .catch((error) => ({ error: String(error) }));
       console.warn(
         `[e2e diagnostics] url=${state.url} title=${JSON.stringify(
           state.title,
-        )} source=${state.source.slice(0, 500)}`,
+        )} source=${state.source.slice(0, 500)} dom=${JSON.stringify(domState)}`,
       );
     } catch (error) {
       console.warn(`[e2e diagnostics] failed to collect page state: ${error}`);

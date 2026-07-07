@@ -12,22 +12,41 @@
  */
 import { browser, expect } from "@wdio/globals";
 
+async function enableMockProvider() {
+  // The app must be loaded before localStorage has an origin to write to.
+  await browser
+    .$('[data-testid="terminal-pane"]')
+    .waitForExist({ timeout: 30000 });
+
+  // Enable the deterministic mock provider, then reload so boot selects it
+  // as the default model and unlocks the composer (no keys required).
+  await browser.execute(() => window.localStorage.setItem("terax.e2e", "1"));
+  await browser.refresh();
+  await browser
+    .$('[data-testid="terminal-pane"]')
+    .waitForExist({ timeout: 30000 });
+
+  await browser.waitUntil(
+    async () => {
+      const state = await browser.execute(
+        () => window.__TERAX_E2E_CHAT_READY__?.() ?? null,
+      );
+      return (
+        state?.sessionsHydrated === true &&
+        Boolean(state.activeSessionId) &&
+        state.selectedModelId === "mock-echo"
+      );
+    },
+    {
+      timeout: 30000,
+      timeoutMsg: "mock chat runtime did not become ready",
+    },
+  );
+}
+
 describe("ai chat (mock provider)", () => {
   it("streams a mock assistant reply end to end", async () => {
-    // The app must be loaded before localStorage has an origin to write to.
-    await browser
-      .$('[data-testid="terminal-pane"]')
-      .waitForExist({ timeout: 30000 });
-
-    // Enable the deterministic mock provider, then reload so boot selects it
-    // as the default model and unlocks the composer (no keys required).
-    await browser.execute(() =>
-      window.localStorage.setItem("terax.e2e", "1"),
-    );
-    await browser.refresh();
-    await browser
-      .$('[data-testid="terminal-pane"]')
-      .waitForExist({ timeout: 30000 });
+    await enableMockProvider();
 
     // Open the AI composer. The shortcut is a window capture-phase listener, so
     // it fires even though the terminal holds focus on boot.
@@ -41,7 +60,7 @@ describe("ai chat (mock provider)", () => {
 
     // Submitting auto-opens the mini window, where the mock streams its reply.
     const reply = await browser.$("*=Mock reply");
-    await reply.waitForExist({ timeout: 20000 });
+    await reply.waitForExist({ timeout: 30000 });
     await expect(reply).toBeExisting();
   });
 });

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { usePushToTalk } from "@/modules/ai/hooks/usePushToTalk";
+import { isE2eMockEnabled } from "@/modules/ai/lib/mockFlags";
 import { PiComposer } from "@/modules/pi/components/PiComposer";
 import {
   type PendingPiDestructiveAction,
@@ -224,6 +225,7 @@ export function PiPanel({
   const status = panelState.runtime.status;
   const runtimeReady = panelState.runtime.ready;
   const canCreateSession = panelState.composer.canCreateSession;
+  const e2eMockEnabled = isE2eMockEnabled();
   const selectedSession = panelState.sessions.selected;
   const selectedSessionSendable = panelState.sessions.selectedSendable;
   const selectedTranscript = panelState.sessions.transcript;
@@ -989,6 +991,15 @@ export function PiPanel({
         ) : null}
 
         <SidebarPanelBody>
+          {e2eMockEnabled ? (
+            <div
+              hidden
+              data-testid="pi-e2e-state"
+              data-runtime-ready={runtimeReady ? "true" : "false"}
+              data-can-create-session={canCreateSession ? "true" : "false"}
+              data-workspace-root={workspaceRoot ?? ""}
+            />
+          ) : null}
           {supportingSectionsHidden ? null : (
             <>
               <PiSessionList

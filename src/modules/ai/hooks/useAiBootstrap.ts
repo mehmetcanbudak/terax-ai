@@ -12,6 +12,14 @@ import { useAgentsStore } from "../store/agentsStore";
 import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
 
+type E2eChatReadyWindow = typeof window & {
+  __TERAX_E2E_CHAT_READY__?: () => {
+    activeSessionId: string | null;
+    selectedModelId: string;
+    sessionsHydrated: boolean;
+  };
+};
+
 /**
  * Startup wiring for the AI subsystem: loads provider keys (and keeps them in
  * sync), hydrates the preference store and mirrors the default model, hydrates
@@ -92,9 +100,29 @@ export function useAiBootstrap(): {
     void initPrefs();
   }, [initPrefs]);
   useEffect(() => {
-    if (!prefsHydrated) return;
-    setSelectedModelId(e2eMockEnabled ? E2E_MOCK_MODEL_ID : prefDefaultModel);
+    if (!e2eMockEnabled) return;
+    setSelectedModelId(E2E_MOCK_MODEL_ID);
+  }, [e2eMockEnabled, setSelectedModelId]);
+  useEffect(() => {
+    if (e2eMockEnabled || !prefsHydrated) return;
+    setSelectedModelId(prefDefaultModel);
   }, [e2eMockEnabled, prefsHydrated, prefDefaultModel, setSelectedModelId]);
+
+  useEffect(() => {
+    if (!e2eMockEnabled || typeof window === "undefined") return;
+    const e2eWindow = window as E2eChatReadyWindow;
+    e2eWindow.__TERAX_E2E_CHAT_READY__ = () => {
+      const state = useChatStore.getState();
+      return {
+        activeSessionId: state.activeSessionId,
+        selectedModelId: state.selectedModelId,
+        sessionsHydrated: state.sessionsHydrated,
+      };
+    };
+    return () => {
+      delete e2eWindow.__TERAX_E2E_CHAT_READY__;
+    };
+  }, [e2eMockEnabled]);
 
   useEffect(() => {
     void hydrateSessions();

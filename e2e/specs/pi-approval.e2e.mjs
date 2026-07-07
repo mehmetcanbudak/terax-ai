@@ -45,12 +45,38 @@ async function openCodePanel() {
     .waitForExist({ timeout: 15000 });
 }
 
-async function createPiSession() {
-  const createButton = await browser.$(
-    '//button[normalize-space(.)="New" or normalize-space(.)="Create session"]',
+async function waitForPiCreateReady() {
+  const state = await browser.$('[data-testid="pi-e2e-state"]');
+  await state.waitForExist({ timeout: 30000 });
+  await browser.waitUntil(
+    async () =>
+      (await state.getAttribute("data-runtime-ready")) === "true" &&
+      (await state.getAttribute("data-can-create-session")) === "true",
+    {
+      timeout: 60000,
+      timeoutMsg: "Pi runtime did not become ready for session creation",
+    },
   );
-  await createButton.waitForClickable({ timeout: 30000 });
-  await createButton.click();
+}
+
+async function clickCreateSession() {
+  const emptyCreateButton = await browser.$(
+    '[data-testid="pi-create-session-button"]',
+  );
+  if (await emptyCreateButton.isExisting()) {
+    await emptyCreateButton.waitForClickable({ timeout: 15000 });
+    await emptyCreateButton.click();
+    return;
+  }
+
+  const newButton = await browser.$('[data-testid="pi-new-session-button"]');
+  await newButton.waitForClickable({ timeout: 15000 });
+  await newButton.click();
+}
+
+async function createPiSession() {
+  await waitForPiCreateReady();
+  await clickCreateSession();
 
   const prompt = await browser.$('textarea[aria-label="Pi prompt"]');
   await browser.waitUntil(async () => prompt.isEnabled(), {

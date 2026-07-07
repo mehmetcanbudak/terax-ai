@@ -314,6 +314,7 @@ export function PiSessionList({
           size="xs"
           variant="ghost"
           className="h-5 rounded-md px-1.5 text-[10px]"
+          data-testid="pi-new-session-button"
           disabled={!canCreateSession || disabled}
           onClick={onCreateSession}
         >
@@ -343,6 +344,7 @@ export function PiSessionList({
               <Button
                 size="xs"
                 className="h-6 rounded-md text-[10.5px]"
+                data-testid="pi-create-session-button"
                 disabled={disabled}
                 onClick={onCreateSession}
               >
