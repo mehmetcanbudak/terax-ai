@@ -7,7 +7,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const REQUIRED_RELEASE_READINESS_TEXT = [
   "https://github.com/mehmetcanbudak/terax-ai/pull/1",
-  "Latest application-code head inspected: `e6563529da4747e119480708c28ffe505df89d36`",
+  "Latest application-code head inspected: `6d1bf0d7193aa6a3d7671b0d0054f379fb784458`",
   "mergeStateStatus=UNSTABLE",
   "mergeable=MERGEABLE",
   "Final CI/e2e confirmation is deferred until all non-CI work is done",
@@ -32,6 +32,7 @@ export const REQUIRED_RELEASE_READINESS_TEXT = [
   "cargo test --locked --features openclicky",
   "10M",
   "1776.6 KB",
+  "src/modules/ai/lib/proxyFetch.test.ts",
 ];
 
 export const REQUIRED_MANUAL_SMOKE_SECTIONS = [

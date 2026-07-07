@@ -8,12 +8,12 @@ The PR branch is no longer textually merge-conflicted with `origin/main` in the 
 
 ```bash
 git rev-parse HEAD origin/main fork/pi-sidebar
-# latest application-code head inspected: e6563529da4747e119480708c28ffe505df89d36
+# latest application-code head inspected: 6d1bf0d7193aa6a3d7671b0d0054f379fb784458
 # origin/main: 78a0b3dd79554ad4af89e61d97004f3475cd9953
 
 git merge-tree --write-tree HEAD origin/main
 # exits 0
-# tree: 782e0cfafdc9c074fdc90b678dde6c917e8a077b
+# tree: b6b1744ec9fd0e0fde922ceb47dd02d857830db0
 ```
 
 `git merge-tree --write-tree HEAD origin/main` exits 0. That means the current local branch can produce a clean merge tree with the fetched upstream main branch.
@@ -46,7 +46,7 @@ The merge preserved the webview-native Pi boundary:
 
 ## CI/e2e state after conflict resolution
 
-CI should be checked at the end of the non-CI cleanup pass. As of the last lightweight PR inspection, the fork-local CI run for `e6563529d` had successful non-e2e jobs and an in-progress Linux e2e job. The e2e job should be rechecked after the remaining documentation and cleanup commits are pushed.
+CI should be checked at the end of the non-CI cleanup pass. As of the last lightweight PR inspection, the fork-local CI run for `e6563529d` had successful non-e2e jobs and an in-progress Linux e2e job. The local application-code tail is now `6d1bf0d71`, so the e2e job should be rechecked after the remaining documentation and cleanup commits are pushed.
 
 ## Previously conflicted paths, now resolved
 
