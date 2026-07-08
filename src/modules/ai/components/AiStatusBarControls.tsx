@@ -102,10 +102,10 @@ export function AiStatusBarControls({
 }) {
   const c = useComposer();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const openMini = useChatStore((s) => s.openMini);
+  const toggleMini = useChatStore((s) => s.toggleMini);
   const miniOpen = useChatStore((s) => s.mini.open);
   const closePanel = useChatStore((s) => s.closePanel);
-  const openConversation = onOpenConversation ?? openMini;
+  const openConversation = onOpenConversation ?? toggleMini;
 
   return (
     <div className="flex items-center gap-0.5">
@@ -175,9 +175,12 @@ export function AiStatusBarControls({
         </Kbd>
       </Button>
       <IconBtn
-        title={miniOpen ? "Mini-window open" : "Open conversation"}
+        title={
+          onOpenConversation
+            ? "Open conversation"
+            : `${miniOpen ? "Close" : "Open"} AI chat window (${fmtShortcut("⇧", MOD_KEY, "I")})`
+        }
         onClick={openConversation}
-        disabled={!onOpenConversation && miniOpen}
       >
         <HugeiconsIcon icon={Message01Icon} size={13} strokeWidth={1.75} />
       </IconBtn>

@@ -35,7 +35,7 @@ export const REQUIRED_RELEASE_READINESS_TEXT = [
   "cargo test --locked --features openclicky",
   "11M",
   "6.6M",
-  "1776.7 KB",
+  "1779.1 KB",
   "src/modules/ai/lib/proxyFetch.test.ts",
 ];
 
