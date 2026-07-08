@@ -33,7 +33,7 @@ function healthyReleaseWorkflow() {
     "jobs:",
     "  publish-tauri:",
     "    steps:",
-    "      - uses: tauri-apps/tauri-action@v0",
+    "      - uses: tauri-apps/tauri-action@v1",
     "        env:",
     "          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
     "          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
@@ -86,7 +86,7 @@ describe("checkUpdaterKeyRotation", () => {
     expect(result.ok).toBe(true);
     expect(result.errors).toEqual([]);
     expect(result.decodedPubkey).toContain(EXPECTED_UPDATER_KEY_ID);
-    expect(result.workflowAction).toBe("tauri-apps/tauri-action@v0");
+    expect(result.workflowAction).toBe("tauri-apps/tauri-action@v1");
   });
 
   it("fails when the embedded updater pubkey still uses the old key id", async () => {
@@ -126,7 +126,7 @@ describe("checkUpdaterKeyRotation", () => {
           "jobs:",
           "  publish-tauri:",
           "    steps:",
-          "      - uses: tauri-apps/tauri-action@v0",
+          "      - uses: tauri-apps/tauri-action@v1",
         ].join("\n"),
       }),
     );

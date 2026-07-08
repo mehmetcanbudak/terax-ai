@@ -10,7 +10,7 @@ Do not paste private key values, passwords, release tokens, or unredacted feed U
 | --- | --- |
 | Tester |  |
 | Date |  |
-| PR / branch | `#964` / `pi-sidebar` |
+| PR / branch | `#1` / `pi-sidebar` |
 | Commit tested |  |
 | Release or test-feed URL |  |
 | Platform(s) tested |  |

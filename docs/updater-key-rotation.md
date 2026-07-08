@@ -88,7 +88,7 @@ key, after the maintainer chooses the migration path.
 
 - [x] Pubkey rotated in `tauri.conf.json` to `52D6B9847A3B8F15`.
 - [x] Local config audit confirms the embedded updater pubkey decodes to `untrusted comment: minisign public key: 52D6B9847A3B8F15`.
-- [x] Release workflow wiring audit confirms the current `.github/workflows/release.yml` passes `secrets.TAURI_SIGNING_PRIVATE_KEY` and `secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD` into `tauri-apps/tauri-action@v0`. There is no separate AppImage re-sign step in the current workflow; if one is added later, re-audit that it receives the same new-key secrets.
+- [x] Release workflow wiring audit confirms the current `.github/workflows/release.yml` passes `secrets.TAURI_SIGNING_PRIVATE_KEY` and `secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD` into `tauri-apps/tauri-action@v1`. There is no separate AppImage re-sign step in the current workflow; if one is added later, re-audit that it receives the same new-key secrets.
 - [x] Static local verifier added: `pnpm check:updater-key-rotation` decodes the embedded Tauri updater pubkey, checks the expected release feed endpoint, and verifies the release workflow signing env wiring.
 - [x] Feed signature inspector added: `pnpm run inspect:updater-feed -- [latest.json-or-url] --expect-key <KEY_ID>` decodes Tauri feed platform signatures and fails if any platform uses the wrong minisign key id.
 - [x] Live feed audit confirms the current public `v0.8.2` `latest.json` exists and all embedded platform signatures carry old key id `3BABFD8AB60E3469`, while this branch embeds new pubkey `52D6B9847A3B8F15`. This means a build from this branch cannot validate the current public latest feed until a new-key signed release or test feed exists.

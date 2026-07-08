@@ -41,7 +41,7 @@ describe("checkPiReleaseDocs", () => {
     const root = await mkdtemp(join(tmpdir(), "terax-pi-release-docs-blocker-"));
     await writeFixture(root, {
       "docs/pi-sidebar-release-readiness.md": REQUIRED_RELEASE_READINESS_TEXT.filter(
-        (line) => line !== "CI run `28903209891` completed successfully",
+        (line) => line !== "completed successfully for PR head",
       ).join("\n"),
       "docs/pi-sidebar-manual-smoke-report.md": manualSmokeDoc,
     });
@@ -52,7 +52,7 @@ describe("checkPiReleaseDocs", () => {
     expect(result.errors).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "docs/pi-sidebar-release-readiness.md missing required release-readiness text: CI run `28903209891` completed successfully",
+          "docs/pi-sidebar-release-readiness.md missing required release-readiness text: completed successfully for PR head",
         ),
       ]),
     );
