@@ -1,12 +1,11 @@
 use ignore::WalkBuilder;
-use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo_matcher::{Config, Matcher, Utf32Str};
 use serde::Serialize;
 
 use super::to_canon;
+use crate::modules::capabilities::AppCapabilityState;
 use crate::modules::workspace::{resolve_path, WorkspaceEnv};
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize)]
 pub struct SearchHit {
     /// Absolute path of the matched file.
     pub path: String,
@@ -44,15 +43,14 @@ const PRUNE_DIRS: &[&str] = &[
     "__pycache__",
 ];
 
-#[tauri::command]
-pub fn fs_search(
+pub fn fs_search_inner(
     root: String,
     query: String,
     limit: Option<usize>,
-    workspace: Option<WorkspaceEnv>,
+    workspace: WorkspaceEnv,
     show_hidden: Option<bool>,
 ) -> Result<SearchResult, String> {
-    let q = query.trim();
+    let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Ok(SearchResult {
             hits: Vec::new(),
@@ -61,13 +59,12 @@ pub fn fs_search(
     }
     let cap = limit.unwrap_or(200).min(1000);
     let show_hidden = show_hidden.unwrap_or(false);
-    let workspace = WorkspaceEnv::from_option(workspace);
     let root_path = resolve_path(&root, &workspace);
     if !root_path.is_dir() {
         return Err(format!("not a directory: {root}"));
     }
 
-    let mut cands: Vec<SearchHit> = Vec::new();
+    let mut out: Vec<SearchHit> = Vec::with_capacity(cap.min(64));
     let mut scanned: usize = 0;
     let mut truncated = false;
 
@@ -98,6 +95,10 @@ pub fn fs_search(
             truncated = true;
             break;
         }
+        if out.len() >= cap {
+            truncated = true;
+            break;
+        }
         let path = dent.path();
         if path == root_path {
             continue;
@@ -106,12 +107,15 @@ pub fn fs_search(
             Ok(r) => to_canon(r),
             Err(_) => continue,
         };
+        if !rel.to_lowercase().contains(&q) {
+            continue;
+        }
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let is_dir = dent.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        cands.push(SearchHit {
+        out.push(SearchHit {
             path: display_path(path, &root_path, &root, &workspace),
             rel,
             name,
@@ -119,32 +123,36 @@ pub fn fs_search(
         });
     }
 
-    let hits = rank_fuzzy(cands, q, cap);
-    Ok(SearchResult { hits, truncated })
+    // Rank: filename matches first, then shorter relative paths.
+    out.sort_by_cached_key(|hit| {
+        let name_match = hit.name.to_lowercase().contains(&q);
+        (!name_match, hit.rel.len())
+    });
+
+    Ok(SearchResult {
+        hits: out,
+        truncated,
+    })
 }
 
-/// Fuzzy-rank candidates against the query (path-aware, smart-case), keeping
-/// the top `cap`. Ties break toward shorter relative paths.
-fn rank_fuzzy(cands: Vec<SearchHit>, query: &str, cap: usize) -> Vec<SearchHit> {
-    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
-    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
-    let mut buf = Vec::new();
-
-    let mut scored = Vec::with_capacity(cands.len());
-    for (i, c) in cands.iter().enumerate() {
-        if let Some(s) = pattern.score(Utf32Str::new(&c.rel, &mut buf), &mut matcher) {
-            scored.push((s, i));
-        }
-    }
-    scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| cands[a.1].rel.len().cmp(&cands[b.1].rel.len()))
-    });
-    scored
-        .into_iter()
-        .take(cap)
-        .map(|(_, i)| cands[i].clone())
-        .collect()
+#[tauri::command]
+pub fn fs_search(
+    app_audit: tauri::State<AppCapabilityState>,
+    root: String,
+    query: String,
+    limit: Option<usize>,
+    workspace: Option<WorkspaceEnv>,
+    show_hidden: Option<bool>,
+) -> Result<SearchResult, String> {
+    app_audit.execute_app_capability("app.file_search", || {
+        fs_search_inner(
+            root,
+            query,
+            limit,
+            WorkspaceEnv::from_option(workspace),
+            show_hidden,
+        )
+    })
 }
 
 #[derive(Serialize)]
@@ -153,12 +161,11 @@ pub struct ListFilesResult {
     pub truncated: bool,
 }
 
-#[tauri::command]
-pub fn fs_list_files(
+pub fn fs_list_files_inner(
     root: String,
     limit: Option<usize>,
     max_depth: Option<usize>,
-    workspace: Option<WorkspaceEnv>,
+    workspace: WorkspaceEnv,
     show_hidden: Option<bool>,
 ) -> Result<ListFilesResult, String> {
     const DEFAULT_LIMIT: usize = 2_000;
@@ -169,7 +176,6 @@ pub fn fs_list_files(
     let cap = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, HARD_LIMIT);
     let depth = max_depth.unwrap_or(DEFAULT_DEPTH).clamp(1, HARD_DEPTH);
     let show_hidden = show_hidden.unwrap_or(false);
-    let workspace = WorkspaceEnv::from_option(workspace);
     let root_path = resolve_path(&root, &workspace);
     if !root_path.is_dir() {
         return Err(format!("not a directory: {root}"));
@@ -224,8 +230,28 @@ pub fn fs_list_files(
         }
     }
 
-    files.sort_by_key(|a| a.to_lowercase());
+    files.sort_by_cached_key(|a| a.to_lowercase());
     Ok(ListFilesResult { files, truncated })
+}
+
+#[tauri::command]
+pub fn fs_list_files(
+    app_audit: tauri::State<AppCapabilityState>,
+    root: String,
+    limit: Option<usize>,
+    max_depth: Option<usize>,
+    workspace: Option<WorkspaceEnv>,
+    show_hidden: Option<bool>,
+) -> Result<ListFilesResult, String> {
+    app_audit.execute_app_capability("app.file_list", || {
+        fs_list_files_inner(
+            root,
+            limit,
+            max_depth,
+            WorkspaceEnv::from_option(workspace),
+            show_hidden,
+        )
+    })
 }
 
 fn display_path(
@@ -247,38 +273,4 @@ fn display_path(
         }
     }
     to_canon(path)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn hit(rel: &str) -> SearchHit {
-        SearchHit {
-            path: rel.to_string(),
-            rel: rel.to_string(),
-            name: rel.rsplit('/').next().unwrap_or(rel).to_string(),
-            is_dir: false,
-        }
-    }
-
-    #[test]
-    fn rank_fuzzy_prefers_name_and_shorter_path() {
-        let cands = vec![
-            hit("src/deeply/nested/config.rs"),
-            hit("config.rs"),
-            hit("src/main.rs"),
-        ];
-        let out = rank_fuzzy(cands, "config", 10);
-        assert_eq!(out[0].rel, "config.rs");
-        assert!(!out.iter().any(|h| h.rel == "src/main.rs"));
-    }
-
-    #[test]
-    fn rank_fuzzy_matches_subsequence() {
-        let cands = vec![hit("CommandPalette.tsx"), hit("readme.md")];
-        let out = rank_fuzzy(cands, "cmdp", 10);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].rel, "CommandPalette.tsx");
-    }
 }

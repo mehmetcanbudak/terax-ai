@@ -1,0 +1,102 @@
+# End-to-end tests
+
+These specs drive the real, packaged Terax binary through
+[WebdriverIO](https://webdriver.io/) and
+[`tauri-driver`](https://v2.tauri.app/develop/tests/webdriver/), exercising the
+native WebView the way a user would.
+
+## Platform support
+
+`tauri-driver` bridges WebDriver to the platform WebView driver. That driver
+exists on **Linux** (WebKitWebDriver) and **Windows** (Edge WebDriver) only.
+**There is no WebDriver for WKWebView on macOS**, so these tests cannot run on
+the macOS dev machine. They run in CI on Linux (see `.github/workflows/ci.yml`,
+job `e2e`).
+
+Authoring on macOS is fine: the spec files live outside `./src`, so they are
+not type-checked or linted by the frontend toolchain, and CI is the source of
+truth for execution.
+
+## What is covered
+
+Golden flows that need no AI provider, secrets, or network:
+
+- `smoke.e2e.mjs` - the app boots, the React root renders, the app or
+  workspace title is shown, and the tab bar plus a terminal pane mount on first
+  launch.
+- `tabs.e2e.mjs` - opening a terminal tab from the new-tab menu increases the
+  tab count; closing a tab decreases it.
+- `terminal.e2e.mjs` - a PTY-backed xterm mounts, accepts keystrokes through
+  its helper textarea, and the UI stays responsive after a command.
+- `command-palette.e2e.mjs` - Ctrl+Shift+P opens the cmdk palette (the global
+  shortcut fires even with the terminal focused), typing filters, Escape closes.
+- `new-editor.e2e.mjs` - Ctrl+E opens the new-file dialog; typing a name and
+  pressing Escape cancels without writing a file.
+- `ai-chat.e2e.mjs` - the AI chat surface end to end against a deterministic
+  mock provider (no keys, no network). Sets the `terax.e2e` localStorage flag,
+  reloads, opens the composer (Ctrl+I), sends a prompt, and asserts the mocked
+  assistant reply streams in. This is the Phase C, Stage 0 scaffold.
+- `pi-approval.e2e.mjs` - the Pi surface against the deterministic faux Pi
+  provider. The mock emits `write_file` tool calls; approving must write a
+  fixture through Rust `pi_agent_tool_execute`, while denying must leave the
+  fixture absent.
+
+### The mock provider (terax.e2e flag)
+
+The chat surface needs a live BYOK provider, which these tests must not depend
+on. Setting `localStorage["terax.e2e"] = "1"` (then reloading) swaps in a
+deterministic offline `MockLanguageModelV3` (`src/modules/ai/lib/mockProvider.ts`)
+that streams a canned reply. The flag also enables the Pi faux provider
+(`src/modules/pi/bridge/pi-mock.ts`), registers a hidden `mock-echo` model,
+makes it the default selection, and satisfies the composer's "has a provider"
+gate. In normal use the flag is unset, so none of this is reachable and the
+mock code stays in a lazily loaded chunk.
+
+xterm renders to a WebGL canvas, so on-screen terminal text is not readable
+through the DOM. The terminal spec asserts the input plumbing structurally
+rather than scraping rendered output.
+
+### Not yet covered (and why)
+
+- **Theme switching** lives in a separate settings window; `tauri-driver`
+  drives one WebView session at a time, so cross-window flows need extra
+  plumbing.
+- **Git history / git graph** needs a seeded git repository and a workspace
+  with source-control context; worth adding once a fixture repo is wired into
+  the CI job.
+- **Breadcrumb cd navigation** depends on shell-integration OSC 7 sequences,
+  which vary by the CI shell; it would be flaky without a pinned shell.
+
+## Running locally (Linux)
+
+```sh
+# one-time: the WebDriver bridge and the WebKit driver
+cargo install tauri-driver --locked
+sudo apt-get install -y webkit2gtk-driver xvfb
+
+# build the frontend and the release binary the driver will launch
+pnpm install
+pnpm build
+export TAURI_CONFIG='{"app":{"windows":[{"label":"main","title":"Terax","width":800,"height":600,"minWidth":420,"minHeight":280,"decorations":false,"transparent":true,"visible":true,"dragDropEnabled":true}]}}'
+pnpm tauri build --ci --no-bundle --config "$TAURI_CONFIG"
+
+# run the specs (headless)
+xvfb-run -a pnpm e2e
+```
+
+`pnpm e2e` runs `wdio run ./wdio.conf.mjs`. The config spawns `tauri-driver`
+itself and points the session at `src-tauri/target/release/terax`. Build the
+binary through the Tauri CLI so the production frontend assets are embedded;
+plain `cargo build --release` can leave the app pointed at the dev server.
+
+## Adding a spec
+
+1. Add `e2e/specs/<name>.e2e.mjs` (the `.e2e.mjs` suffix is required by the
+   `specs` glob in `wdio.conf.mjs`).
+2. Prefer stable `data-testid` hooks over class names. Existing hooks:
+   `tab-bar`, `new-tab-button`, `new-tab-terminal`, `terminal-pane`,
+   `cwd-breadcrumb`, `command-palette-input`, `ai-composer-input`,
+   `pi-e2e-state`, `pi-create-session-button`, `pi-new-session-button`,
+   `pi-tool-approval-approve`, `pi-tool-approval-deny`.
+3. Keep specs free of AI providers, secrets, and network so they stay
+   deterministic in CI.

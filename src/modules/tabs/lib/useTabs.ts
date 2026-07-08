@@ -1,5 +1,10 @@
 import { isMarkdownPath } from "@/lib/utils";
 import {
+  createStarterWorkflowDocument,
+  type WorkflowDocument,
+} from "@/modules/workflow/lib/schema";
+import { workflowTerminalLeafIds } from "@/modules/workflow/lib/terminalNode";
+import {
   findLeafCwd,
   hasLeaf,
   leafIds,
@@ -18,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export const MAX_PANES_PER_TAB = 4;
 
 type TabBase = {
-  spaceId: string;
+  spaceId?: string;
   /** Restored from disk, not yet activated: rendered as a placeholder, not mounted. */
   cold?: boolean;
 };
@@ -64,6 +69,7 @@ export type MarkdownTab = TabBase & {
   kind: "markdown";
   title: string;
   path: string;
+  view?: "preview" | "source" | "split";
 };
 
 export type AiDiffStatus = "pending" | "approved" | "rejected";
@@ -111,6 +117,35 @@ export type GitCommitFileDiffTab = TabBase & {
   originalPath: string | null;
 };
 
+export type PiWorkspaceTab = TabBase & {
+  id: number;
+  kind: "pi-workspace";
+  title: "Code";
+};
+
+export type ArtifactWorkspaceTab = TabBase & {
+  id: number;
+  kind: "artifact";
+  title: string;
+  conversationId: string;
+  selectedSlug: string | null;
+};
+
+export type ArtifactHubTab = TabBase & {
+  id: number;
+  kind: "artifact-hub";
+  title: "Artifacts";
+};
+
+export type WorkflowTab = TabBase & {
+  id: number;
+  kind: "workflow";
+  title: string;
+  document: WorkflowDocument;
+  dirty: boolean;
+  path?: string;
+};
+
 export type Tab =
   | TerminalTab
   | EditorTab
@@ -119,7 +154,11 @@ export type Tab =
   | AiDiffTab
   | GitDiffTab
   | GitHistoryTab
-  | GitCommitFileDiffTab;
+  | GitCommitFileDiffTab
+  | PiWorkspaceTab
+  | ArtifactWorkspaceTab
+  | ArtifactHubTab
+  | WorkflowTab;
 
 export type TabPatch = Partial<{
   title: string;
@@ -127,6 +166,7 @@ export type TabPatch = Partial<{
   path: string;
   dirty: boolean;
   url: string;
+  selectedSlug: string | null;
   /** Empty string resets a terminal tab to its cwd-derived name. */
   customTitle: string;
   overrideLanguage: string | null;
@@ -148,6 +188,176 @@ function titleFromUrl(url: string): string {
 
 export const DEFAULT_SPACE_ID = "default";
 
+export type ArtifactWorkspaceTabInput = {
+  conversationId: string;
+  selectedSlug?: string | null;
+  title?: string;
+};
+
+function tabSpaceId(tab: Tab): string {
+  return tab.spaceId ?? DEFAULT_SPACE_ID;
+}
+
+export function createWorkflowTab(id: number, title = "Canvas"): WorkflowTab {
+  return createWorkflowTabFromDocument(
+    id,
+    createStarterWorkflowDocument({ id: `workflow-${id}`, title }),
+  );
+}
+
+export function createWorkflowTabFromDocument(
+  id: number,
+  document: WorkflowDocument,
+  path?: string,
+): WorkflowTab {
+  return {
+    id,
+    kind: "workflow",
+    spaceId: DEFAULT_SPACE_ID,
+    title: document.title,
+    document,
+    dirty: false,
+    ...(path !== undefined && { path }),
+  };
+}
+
+export function terminalLeafIdsForTab(tab: Tab): number[] {
+  if (tab.kind === "terminal") return leafIds(tab.paneTree);
+  if (tab.kind === "workflow") return workflowTerminalLeafIds(tab.document);
+  return [];
+}
+
+export function replaceWorkflowTabDocument(
+  tabs: Tab[],
+  id: number,
+  document: WorkflowDocument,
+  options: { dirty?: boolean; path?: string } = {},
+): Tab[] {
+  return tabs.map((tab) =>
+    tab.id === id && tab.kind === "workflow"
+      ? {
+          ...tab,
+          title: document.title,
+          document,
+          dirty: options.dirty ?? true,
+          ...(options.path !== undefined && { path: options.path }),
+        }
+      : tab,
+  );
+}
+
+export function upsertPiWorkspaceTab(
+  tabs: Tab[],
+  nextId: number,
+  spaceId?: string,
+): { activeId: number; tabs: Tab[] } {
+  const existing = tabs.find((tab) => tab.kind === "pi-workspace");
+  if (existing) return { activeId: existing.id, tabs };
+  return {
+    activeId: nextId,
+    tabs: [
+      ...tabs,
+      {
+        id: nextId,
+        kind: "pi-workspace",
+        ...(spaceId !== undefined && { spaceId }),
+        title: "Code",
+      },
+    ],
+  };
+}
+
+export function upsertArtifactHubTab(
+  tabs: Tab[],
+  nextId: number,
+  spaceId?: string,
+): { activeId: number; tabs: Tab[] } {
+  const existing = tabs.find((tab) => tab.kind === "artifact-hub");
+  if (existing) return { activeId: existing.id, tabs };
+  return {
+    activeId: nextId,
+    tabs: [
+      ...tabs,
+      {
+        id: nextId,
+        kind: "artifact-hub",
+        ...(spaceId !== undefined && { spaceId }),
+        title: "Artifacts",
+      },
+    ],
+  };
+}
+
+export function upsertArtifactWorkspaceTab(
+  tabs: Tab[],
+  nextId: number,
+  input: ArtifactWorkspaceTabInput,
+  spaceId?: string,
+): { activeId: number; tabs: Tab[] } {
+  const existing = tabs.find(
+    (tab) =>
+      tab.kind === "artifact" && tab.conversationId === input.conversationId,
+  );
+  if (existing) {
+    return {
+      activeId: existing.id,
+      tabs: tabs.map((tab) =>
+        tab.id === existing.id && tab.kind === "artifact"
+          ? {
+              ...tab,
+              ...(input.selectedSlug !== undefined && {
+                selectedSlug: input.selectedSlug,
+              }),
+              ...(input.title !== undefined && { title: input.title }),
+            }
+          : tab,
+      ),
+    };
+  }
+  return {
+    activeId: nextId,
+    tabs: [
+      ...tabs,
+      {
+        conversationId: input.conversationId,
+        id: nextId,
+        kind: "artifact",
+        selectedSlug: input.selectedSlug ?? null,
+        ...(spaceId !== undefined && { spaceId }),
+        title: input.title ?? "Artifacts",
+      },
+    ],
+  };
+}
+
+export function upsertWorkflowDocumentTab(
+  tabs: Tab[],
+  nextId: number,
+  document: WorkflowDocument,
+  path?: string,
+  spaceId = DEFAULT_SPACE_ID,
+): { activeId: number; tabs: Tab[] } {
+  const existing = path
+    ? tabs.find((tab) => tab.kind === "workflow" && tab.path === path)
+    : undefined;
+  if (existing) {
+    return {
+      activeId: existing.id,
+      tabs: replaceWorkflowTabDocument(tabs, existing.id, document, {
+        dirty: false,
+      }),
+    };
+  }
+
+  return {
+    activeId: nextId,
+    tabs: [
+      ...tabs,
+      { ...createWorkflowTabFromDocument(nextId, document, path), spaceId },
+    ],
+  };
+}
+
 // Returns the tab at position `idx` within the given space, or undefined when
 // idx is out of range or no matching space tab exists.
 export function pickTabBySpaceIndex(
@@ -155,7 +365,7 @@ export function pickTabBySpaceIndex(
   idx: number,
   spaceId: string,
 ): Tab | undefined {
-  const pool = tabs.filter((t) => t.spaceId === spaceId);
+  const pool = tabs.filter((t) => tabSpaceId(t) === spaceId);
   return pool[idx];
 }
 
@@ -167,7 +377,7 @@ export function nextActiveInSpace(
 ): number | null {
   const closing = tabs.find((t) => t.id === closingId);
   if (!closing) return null;
-  const sameSpace = tabs.filter((t) => t.spaceId === closing.spaceId);
+  const sameSpace = tabs.filter((t) => tabSpaceId(t) === tabSpaceId(closing));
   if (sameSpace.length <= 1) return null;
   const idx = sameSpace.findIndex((t) => t.id === closingId);
   return (sameSpace[idx - 1] ?? sameSpace[idx + 1]).id;
@@ -181,7 +391,7 @@ export function reorderTabsByGap(
 ): Tab[] {
   const moved = tabs.find((t) => t.id === fromId);
   if (!moved) return tabs;
-  const sameSpace = tabs.filter((t) => t.spaceId === moved.spaceId);
+  const sameSpace = tabs.filter((t) => tabSpaceId(t) === tabSpaceId(moved));
   const spaceFrom = sameSpace.findIndex((t) => t.id === fromId);
   let spaceTarget = toGapIndex > spaceFrom ? toGapIndex - 1 : toGapIndex;
   spaceTarget = Math.max(0, Math.min(spaceTarget, sameSpace.length - 1));
@@ -223,19 +433,22 @@ export function planSpaceRemoval(
   fallbackCwd: string | undefined,
   allocId: () => number,
 ): { tabs: Tab[]; disposeLeafIds: number[]; activeId: number } | null {
-  const removed = tabs.filter((t) => t.spaceId === spaceId);
+  const removed = tabs.filter((t) => tabSpaceId(t) === spaceId);
   if (removed.length === 0) return null;
   const disposeLeafIds = removed
     .filter((t) => t.kind === "terminal")
     .flatMap((t) => leafIds((t as TerminalTab).paneTree));
-  let next = tabs.filter((t) => t.spaceId !== spaceId);
+  let next = tabs.filter((t) => tabSpaceId(t) !== spaceId);
   let activeId = currentActiveId;
-  if (!next.some((t) => t.spaceId === fallbackSpaceId)) {
+  if (!next.some((t) => tabSpaceId(t) === fallbackSpaceId)) {
     const tabId = allocId();
-    next = [...next, coldTerminalTab(tabId, allocId(), fallbackSpaceId, fallbackCwd)];
+    next = [
+      ...next,
+      coldTerminalTab(tabId, allocId(), fallbackSpaceId, fallbackCwd),
+    ];
     activeId = tabId;
   } else if (!next.some((t) => t.id === currentActiveId)) {
-    const inFallback = next.filter((t) => t.spaceId === fallbackSpaceId);
+    const inFallback = next.filter((t) => tabSpaceId(t) === fallbackSpaceId);
     activeId = inFallback[inFallback.length - 1].id;
   }
   return { tabs: next, disposeLeafIds, activeId };
@@ -770,7 +983,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
 
       if (existing) {
         const nextTabs = curr.map((t) =>
-          t.id === existing.id
+          t.id === existing.id && t.kind === "git-diff"
             ? { ...t, title: computedTitle, originalPath }
             : t,
         );
@@ -811,7 +1024,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const title = input.branch ? `History · ${input.branch}` : "Git History";
       if (existing) {
         const nextTabs = curr.map((t) =>
-          t.id === existing.id ? { ...t, title } : t,
+          t.id === existing.id && t.kind === "git-history"
+            ? { ...t, title }
+            : t,
         );
         tabsRef.current = nextTabs;
         setTabs(nextTabs);
@@ -857,7 +1072,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const title = `${basename(input.path)} @ ${input.shortSha}`;
       if (existing) {
         const nextTabs = curr.map((t) =>
-          t.id === existing.id
+          t.id === existing.id && t.kind === "git-commit-file"
             ? {
                 ...t,
                 title,
@@ -942,30 +1157,48 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             ...(patch.title !== undefined && { title: patch.title }),
           };
         }
-        // editor tab: auto-promote from preview the moment the file becomes dirty.
-        const autoPin =
-          patch.dirty === true && (x as EditorTab).preview
-            ? { preview: false }
-            : {};
-        return {
-          ...x,
-          ...autoPin,
-          ...(patch.title !== undefined && { title: patch.title }),
-          ...(patch.dirty !== undefined && { dirty: patch.dirty }),
-          ...(patch.path !== undefined && { path: patch.path }),
-          ...(patch.overrideLanguage !== undefined && {
-            overrideLanguage: patch.overrideLanguage,
-          }),
-        };
+        if (x.kind === "editor") {
+          const autoPin =
+            patch.dirty === true && x.preview ? { preview: false } : {};
+          return {
+            ...x,
+            ...autoPin,
+            ...(patch.title !== undefined && { title: patch.title }),
+            ...(patch.dirty !== undefined && { dirty: patch.dirty }),
+            ...(patch.path !== undefined && { path: patch.path }),
+            ...(patch.overrideLanguage !== undefined && {
+              overrideLanguage: patch.overrideLanguage,
+            }),
+          };
+        }
+        if (x.kind === "artifact") {
+          return {
+            ...x,
+            ...(patch.title !== undefined && { title: patch.title }),
+            ...(patch.selectedSlug !== undefined && {
+              selectedSlug: patch.selectedSlug,
+            }),
+          };
+        }
+        if (x.kind === "workflow") {
+          return {
+            ...x,
+            ...(patch.title !== undefined && { title: patch.title }),
+            ...(patch.dirty !== undefined && { dirty: patch.dirty }),
+            ...(patch.path !== undefined && { path: patch.path }),
+          };
+        }
+        if (x.kind === "pi-workspace" || x.kind === "artifact-hub") {
+          return x;
+        }
+        return patch.title !== undefined ? { ...x, title: patch.title } : x;
       }),
     );
   }, []);
 
   const selectByIndex = useCallback(
     (idx: number, spaceId?: string) => {
-      const t = spaceId
-        ? pickTabBySpaceIndex(tabs, idx, spaceId)
-        : tabs[idx];
+      const t = spaceId ? pickTabBySpaceIndex(tabs, idx, spaceId) : tabs[idx];
       if (t) setActiveId(t.id);
     },
     [tabs],

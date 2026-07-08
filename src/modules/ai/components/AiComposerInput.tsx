@@ -212,6 +212,7 @@ export function AiComposerInput() {
           <div className="flex items-start gap-2">
             <textarea
               ref={c.textareaRef}
+              data-testid="ai-composer-input"
               value={c.value}
               onChange={(e) => c.setValue(e.target.value)}
               onKeyUp={updateTrigger}
@@ -271,9 +272,15 @@ export function AiComposerInput() {
           <FilePickerContent
             files={filteredFiles}
             activeIndex={activeIndex}
-            indexing={workspaceFiles.indexing}
-            truncated={workspaceFiles.truncated}
-            hasWorkspace={workspaceRoot !== null}
+            workspace={
+              workspaceRoot === null
+                ? { open: false }
+                : {
+                    open: true,
+                    indexing: workspaceFiles.indexing,
+                    truncated: workspaceFiles.truncated,
+                  }
+            }
             onPick={(f) => void onPickFile(f)}
             onHover={setActiveIndex}
           />

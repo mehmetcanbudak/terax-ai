@@ -1,0 +1,202 @@
+/**
+ * Security flow: webview-native Pi tool approvals, end to end.
+ *
+ * In e2e mock mode, the webview Pi session translates the sentinel prompts
+ * below into a deterministic write_file approval flow. Approving must create
+ * the file through the Rust `pi_agent_tool_execute` path; denying must leave
+ * the file absent.
+ */
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { browser, expect } from "@wdio/globals";
+
+const APPROVE_PROMPT = "[terax-e2e-pi-approval-approved] write the fixture";
+const DENY_PROMPT = "[terax-e2e-pi-approval-denied] write the fixture";
+const APPROVED_RELATIVE_PATH = "e2e/.tmp/pi-approval-approved.txt";
+const DENIED_RELATIVE_PATH = "e2e/.tmp/pi-approval-denied.txt";
+const APPROVED_CONTENT = "approved through Rust pi_agent_tool_execute\n";
+const DENIED_CONTENT = "denied should not be written\n";
+
+const approvedPath = resolve(process.cwd(), APPROVED_RELATIVE_PATH);
+const deniedPath = resolve(process.cwd(), DENIED_RELATIVE_PATH);
+
+function resetFixtures() {
+  mkdirSync(dirname(approvedPath), { recursive: true });
+  rmSync(approvedPath, { force: true });
+  rmSync(deniedPath, { force: true });
+}
+
+async function waitForDocumentText(text, timeout = 30000) {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (expected) => document.body.textContent?.includes(expected) ?? false,
+        text,
+      ),
+    {
+      timeout,
+      timeoutMsg: `document text did not include ${JSON.stringify(text)}`,
+    },
+  );
+}
+
+async function enableMockPiRuntime() {
+  await browser
+    .$('[data-testid="terminal-pane"]')
+    .waitForExist({ timeout: 30000 });
+  await browser.execute(() => window.localStorage.setItem("terax.e2e", "1"));
+  await browser.refresh();
+  await browser
+    .$('[data-testid="terminal-pane"]')
+    .waitForExist({ timeout: 30000 });
+}
+
+async function openCodePanel() {
+  const codeButton = await browser.$('button[title="Code"]');
+  await codeButton.waitForClickable({ timeout: 15000 });
+  await codeButton.click();
+  await browser
+    .$('[aria-label="Code sessions"]')
+    .waitForExist({ timeout: 15000 });
+}
+
+async function waitForPiCreateReady() {
+  await browser
+    .$('[data-testid="pi-e2e-state"]')
+    .waitForExist({ timeout: 30000 });
+  await browser.waitUntil(
+    async () => {
+      const state = await browser.$('[data-testid="pi-e2e-state"]');
+      return (
+        (await state.getAttribute("data-runtime-ready")) === "true" &&
+        (await state.getAttribute("data-can-create-session")) === "true"
+      );
+    },
+    {
+      timeout: 60000,
+      timeoutMsg: "Pi runtime did not become ready for session creation",
+    },
+  );
+}
+
+async function clickCreateSession() {
+  const emptyCreateButton = await browser.$(
+    '[data-testid="pi-create-session-button"]',
+  );
+  if (await emptyCreateButton.isExisting()) {
+    await emptyCreateButton.waitForClickable({ timeout: 15000 });
+    await emptyCreateButton.click();
+    return;
+  }
+
+  const newButton = await browser.$('[data-testid="pi-new-session-button"]');
+  await newButton.waitForClickable({ timeout: 15000 });
+  await newButton.click();
+}
+
+async function createPiSession() {
+  await waitForPiCreateReady();
+  await clickCreateSession();
+
+  const prompt = await browser.$('textarea[aria-label="Pi prompt"]');
+  await browser.waitUntil(async () => prompt.isEnabled(), {
+    timeout: 15000,
+    timeoutMsg: "Pi prompt did not become enabled after creating a session",
+  });
+}
+
+async function sendPiPrompt(text) {
+  const prompt = await browser.$('textarea[aria-label="Pi prompt"]');
+  await prompt.waitForEnabled({ timeout: 15000 });
+  await browser.execute((value) => {
+    const textarea = document.querySelector('textarea[aria-label="Pi prompt"]');
+    if (!(textarea instanceof HTMLTextAreaElement)) {
+      throw new Error("Pi prompt textarea not found");
+    }
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(textarea, value);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+  }, text);
+  await browser.waitUntil(async () => (await prompt.getValue()) === text, {
+    timeout: 15000,
+    timeoutMsg: "Pi prompt value was not applied",
+  });
+
+  const sendButton = await browser.$('button[aria-label="Send prompt"]');
+  await sendButton.waitForClickable({ timeout: 15000 });
+  await sendButton.click();
+}
+
+async function respondToLatestApproval(label) {
+  await waitForDocumentText("needs approval", 20000);
+  const testId =
+    label === "Approve" ? "pi-tool-approval-approve" : "pi-tool-approval-deny";
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (approvalTestId) =>
+          document.querySelectorAll(`[data-testid="${approvalTestId}"]`).length >
+          0,
+        testId,
+      ),
+    {
+      timeout: 15000,
+      timeoutMsg: `${label} approval control did not render`,
+    },
+  );
+
+  await browser.execute((approvalTestId) => {
+    const buttons = Array.from(
+      document.querySelectorAll(`[data-testid="${approvalTestId}"]`),
+    );
+    const button = buttons.at(-1);
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error(`Approval button not found: ${approvalTestId}`);
+    }
+    button.scrollIntoView({ block: "center", inline: "nearest" });
+    button.click();
+  }, testId);
+}
+
+describe("pi tool approvals (mock provider)", () => {
+  before(async () => {
+    resetFixtures();
+    await enableMockPiRuntime();
+    await openCodePanel();
+  });
+
+  after(() => {
+    resetFixtures();
+  });
+
+  it("executes an approved write through the Rust agent-tool path", async () => {
+    await createPiSession();
+    await sendPiPrompt(APPROVE_PROMPT);
+    await respondToLatestApproval("Approve");
+
+    await browser.waitUntil(() => existsSync(approvedPath), {
+      timeout: 20000,
+      timeoutMsg: "approved Pi write did not create the fixture file",
+    });
+    expect(readFileSync(approvedPath, "utf8")).toBe(APPROVED_CONTENT);
+
+    await waitForDocumentText("Mock pi tool follow-up: write completed", 20000);
+  });
+
+  it("does not execute a denied write", async () => {
+    await createPiSession();
+    await sendPiPrompt(DENY_PROMPT);
+    await respondToLatestApproval("Deny");
+
+    await waitForDocumentText("Mock pi tool follow-up: write denied", 20000);
+
+    expect(existsSync(deniedPath)).toBe(false);
+    if (existsSync(deniedPath)) {
+      expect(readFileSync(deniedPath, "utf8")).not.toBe(DENIED_CONTENT);
+    }
+  });
+});

@@ -11,6 +11,10 @@ const AiMiniWindowInner = lazy(() =>
   import("./AiMiniWindow").then((m) => ({ default: m.AiMiniWindow })),
 );
 
+const AiInputBarInner = lazy(() =>
+  import("./AiComposerInput").then((m) => ({ default: m.AiComposerInput })),
+);
+
 const AiInputBarConnectInner = lazy(() =>
   import("./AiInputBar").then((m) => ({ default: m.AiInputBarConnect })),
 );
@@ -31,6 +35,14 @@ export function AiMiniWindow({ state }: { state: PresenceState }) {
   return (
     <Suspense fallback={null}>
       <AiMiniWindowInner state={state} />
+    </Suspense>
+  );
+}
+
+export function AiInputBar() {
+  return (
+    <Suspense fallback={null}>
+      <AiInputBarInner />
     </Suspense>
   );
 }

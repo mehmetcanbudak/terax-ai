@@ -227,6 +227,7 @@ export function CommandPalette({
       >
         <CommandInput
           id="terax-command-palette-input"
+          data-testid="command-palette-input"
           value={query}
           onValueChange={setQuery}
           placeholder={placeholder}
@@ -396,7 +397,11 @@ function rankCommands(
   }
   const scored: { item: PaletteItem; s: number }[] = [];
   for (const item of items) {
-    const s = fuzzyBest(term, [item.title, item.group, ...(item.keywords ?? [])]);
+    const s = fuzzyBest(term, [
+      item.title,
+      item.group,
+      ...(item.keywords ?? []),
+    ]);
     if (s !== null) scored.push({ item, s });
   }
   scored.sort(
@@ -494,7 +499,9 @@ function StatusItem({
         />
       ) : null}
       <span
-        className={tone === "error" ? "text-destructive" : "text-muted-foreground"}
+        className={
+          tone === "error" ? "text-destructive" : "text-muted-foreground"
+        }
       >
         {label}
       </span>

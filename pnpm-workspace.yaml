@@ -1,6 +1,16 @@
+packages: []
+
+overrides:
+  fast-uri@<3.1.2: ">=3.1.2"
+  hono: 4.12.25
+
 minimumReleaseAge: 4320
 minimumReleaseAgeStrict: true
+verifyDepsBeforeRun: false
 allowBuilds:
+  "@google/genai": true
+  edgedriver: false
   esbuild: true
-  msgpackr-extract: false
+  geckodriver: false
   msw: true
+  protobufjs: true

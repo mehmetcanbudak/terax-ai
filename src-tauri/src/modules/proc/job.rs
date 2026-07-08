@@ -1,5 +1,5 @@
-//! Windows Job Object with KILL_ON_JOB_CLOSE for child process trees.
-//! Dropping the handle kills the whole tree, the only reliable orphan guard
+//! Windows Job Object with KILL_ON_JOB_CLOSE for ConPTY children.
+//! Dropping the handle kills the whole tree — only reliable orphan guard
 //! on Windows.
 
 #![cfg(windows)]
@@ -15,15 +15,25 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
-pub struct ProcessJob {
+pub struct PtyJob {
     handle: HANDLE,
 }
 
-unsafe impl Send for ProcessJob {}
-unsafe impl Sync for ProcessJob {}
+pub type ProcessJob = PtyJob;
 
-impl ProcessJob {
+// SAFETY: `PtyJob` has unique ownership of a Windows Job HANDLE. Handles are
+// reference-counted kernel objects that may be closed from any thread, and this
+// type exposes no interior access other than dropping the owned handle.
+unsafe impl Send for PtyJob {}
+// SAFETY: Shared references cannot mutate the handle value. The only side
+// effect is `Drop`, which requires unique ownership of the `PtyJob`.
+unsafe impl Sync for PtyJob {}
+
+impl PtyJob {
     pub fn create_for(pid: u32) -> io::Result<Self> {
+        // SAFETY: All Win32 calls receive valid pointer arguments for the
+        // documented structure sizes. Every owned HANDLE created in this block
+        // is either transferred into `PtyJob` or closed on the error path.
         unsafe {
             let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
             if job.is_null() || job == INVALID_HANDLE_VALUE {
@@ -64,9 +74,11 @@ impl ProcessJob {
     }
 }
 
-impl Drop for ProcessJob {
+impl Drop for PtyJob {
     fn drop(&mut self) {
         if !self.handle.is_null() && self.handle != INVALID_HANDLE_VALUE {
+            // SAFETY: `handle` is owned by this `PtyJob`, checked for sentinel
+            // invalid values, and is closed exactly once in `Drop`.
             unsafe { CloseHandle(self.handle) };
         }
     }
@@ -80,7 +92,7 @@ mod tests {
 
     #[test]
     fn create_for_invalid_pid_errors() {
-        match ProcessJob::create_for(0xFFFFFFFE) {
+        match PtyJob::create_for(0xFFFFFFFE) {
             Err(_) => {}
             Ok(_) => panic!("invalid pid must error"),
         }
@@ -93,7 +105,7 @@ mod tests {
             .spawn()
             .expect("spawn cmd.exe");
 
-        let job = ProcessJob::create_for(child.id()).expect("create job");
+        let job = PtyJob::create_for(child.id()).expect("create job");
         drop(job);
 
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -102,7 +114,7 @@ mod tests {
                 Some(_) => break,
                 None if Instant::now() >= deadline => {
                     let _ = child.kill();
-                    panic!("child survived 3s after ProcessJob drop");
+                    panic!("child survived 3s after PtyJob drop");
                 }
                 None => std::thread::sleep(Duration::from_millis(50)),
             }

@@ -1,3 +1,4 @@
+import { generateText } from "ai";
 import {
   type AutocompleteProviderId,
   DEFAULT_AUTOCOMPLETE_MODEL,
@@ -5,7 +6,6 @@ import {
 } from "@/modules/ai/config";
 import { buildLanguageModel } from "@/modules/ai/lib/agent";
 import { EMPTY_PROVIDER_KEYS } from "@/modules/ai/lib/keyring";
-import { generateText } from "ai";
 import {
   buildUserPrompt,
   COMPLETION_SYSTEM_PROMPT,

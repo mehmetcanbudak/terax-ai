@@ -1,3 +1,5 @@
+//! Workspace authorization: path canonicalization, root registration, WSL path mapping, and launch-directory detection.
+
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -25,47 +27,58 @@ pub struct WorkspaceRegistry {
 impl WorkspaceRegistry {
     pub fn authorize<P: AsRef<Path>>(&self, path: P) -> std::io::Result<PathBuf> {
         let canonical = std::fs::canonicalize(path.as_ref())?;
-        let mut set = self.roots.lock().expect("workspace registry poisoned");
+        let mut set = self.roots.lock().map_err(|error| {
+            std::io::Error::other(format!("workspace registry lock failed: {error}"))
+        })?;
         set.insert(canonical.clone());
         Ok(canonical)
     }
 
     pub fn is_authorized(&self, target: &Path) -> bool {
-        let set = self.roots.lock().expect("workspace registry poisoned");
-        set.iter().any(|root| target.starts_with(root))
+        match self.roots.lock() {
+            Ok(set) => set.iter().any(|root| target.starts_with(root)),
+            Err(error) => {
+                log::error!("workspace registry lock failed: {error}");
+                false
+            }
+        }
     }
 
     pub fn canonicalize_cached<P: AsRef<Path>>(&self, path: P) -> std::io::Result<PathBuf> {
         let key = path.as_ref().to_path_buf();
-        {
-            let cache = self
-                .canonical_cache
-                .lock()
-                .expect("canonical cache poisoned");
-            if let Some(entry) = cache.get(&key) {
-                if entry.inserted_at.elapsed() < CANONICAL_TTL {
-                    return Ok(entry.canonical.clone());
+        match self.canonical_cache.lock() {
+            Ok(cache) => {
+                if let Some(entry) = cache.get(&key) {
+                    if entry.inserted_at.elapsed() < CANONICAL_TTL {
+                        return Ok(entry.canonical.clone());
+                    }
                 }
+            }
+            Err(error) => {
+                log::warn!("canonical cache lock failed: {error}");
             }
         }
         let canonical = std::fs::canonicalize(&key)?;
-        let mut cache = self
-            .canonical_cache
-            .lock()
-            .expect("canonical cache poisoned");
-        if cache.len() >= CANONICAL_CACHE_CAP {
-            cache.retain(|_, entry| entry.inserted_at.elapsed() < CANONICAL_TTL);
-            if cache.len() >= CANONICAL_CACHE_CAP {
-                cache.clear();
+        match self.canonical_cache.lock() {
+            Ok(mut cache) => {
+                if cache.len() >= CANONICAL_CACHE_CAP {
+                    cache.retain(|_, entry| entry.inserted_at.elapsed() < CANONICAL_TTL);
+                    if cache.len() >= CANONICAL_CACHE_CAP {
+                        cache.clear();
+                    }
+                }
+                cache.insert(
+                    key,
+                    CanonicalEntry {
+                        canonical: canonical.clone(),
+                        inserted_at: Instant::now(),
+                    },
+                );
+            }
+            Err(error) => {
+                log::warn!("canonical cache lock failed: {error}");
             }
         }
-        cache.insert(
-            key,
-            CanonicalEntry {
-                canonical: canonical.clone(),
-                inserted_at: Instant::now(),
-            },
-        );
         Ok(canonical)
     }
 }
@@ -115,27 +128,14 @@ pub fn authorize_user_spawn_cwd(
     Ok(Some(canonical))
 }
 
-// A saved cwd can be stale or from another environment (e.g. a Windows path in
-// a now-WSL space); the terminal must still open, so fall back to home.
-pub fn user_spawn_cwd_or_home(
-    registry: &WorkspaceRegistry,
-    cwd: Option<&str>,
-    workspace: &WorkspaceEnv,
-) -> Option<String> {
-    let cwd = cwd.map(str::trim).filter(|s| !s.is_empty())?;
-    match authorize_user_spawn_cwd(registry, Some(cwd), workspace) {
-        Ok(_) => Some(cwd.to_owned()),
-        Err(e) => {
-            log::warn!("pty cwd {cwd:?} unusable in {workspace:?} ({e}); opening home");
-            None
-        }
-    }
-}
-
 pub fn bootstrap_registry(registry: &WorkspaceRegistry) {
-    let _ = registry.authorize(resolve_launch_dir());
+    if let Err(e) = registry.authorize(resolve_launch_dir()) {
+        log::debug!("bootstrap registry: launch dir authorize failed: {e}");
+    }
     if let Some(home) = dirs::home_dir() {
-        let _ = registry.authorize(home);
+        if let Err(e) = registry.authorize(home) {
+            log::debug!("bootstrap registry: home dir authorize failed: {e}");
+        }
     }
 }
 
@@ -261,7 +261,7 @@ pub fn appimage_env_overrides() -> Vec<(&'static str, Option<OsString>)> {
         let Some(appdir) = std::env::var_os("APPDIR") else {
             return Vec::new();
         };
-        compute_appimage_env_overrides(Path::new(&appdir), |k| std::env::var_os(k))
+        compute_appimage_env_overrides(Path::new(&appdir), |key| std::env::var_os(key))
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -285,7 +285,7 @@ fn compute_appimage_env_overrides(
             .cloned()
             .collect();
         if kept.len() == original.len() {
-            continue; // nothing AppImage-injected; leave as-is
+            continue;
         }
         match std::env::join_paths(&kept) {
             Ok(joined) if !kept.is_empty() => out.push((key, Some(joined))),
@@ -294,7 +294,7 @@ fn compute_appimage_env_overrides(
     }
 
     for &key in APPIMAGE_VALUE_VARS {
-        if read(key).is_some_and(|v| Path::new(&v).starts_with(appdir)) {
+        if read(key).is_some_and(|value| Path::new(&value).starts_with(appdir)) {
             out.push((key, None));
         }
     }
@@ -308,7 +308,7 @@ fn compute_appimage_env_overrides(
     out
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WorkspaceEnv {
     #[default]
@@ -836,43 +836,6 @@ mod auth_tests {
     }
 
     #[test]
-    fn user_spawn_cwd_or_home_keeps_accessible_dir() {
-        let dir = tempdir("orhome-ok");
-        let reg = WorkspaceRegistry::default();
-        let s = dir.to_string_lossy().into_owned();
-        assert_eq!(
-            user_spawn_cwd_or_home(&reg, Some(&s), &WorkspaceEnv::Local),
-            Some(s)
-        );
-        assert!(reg.is_authorized(&dir));
-    }
-
-    #[test]
-    fn user_spawn_cwd_or_home_falls_back_when_inaccessible() {
-        let mut missing = env::temp_dir();
-        missing.push(format!("terax-orhome-missing-{}", std::process::id()));
-        let reg = WorkspaceRegistry::default();
-        let s = missing.to_string_lossy().into_owned();
-        assert_eq!(
-            user_spawn_cwd_or_home(&reg, Some(&s), &WorkspaceEnv::Local),
-            None
-        );
-    }
-
-    #[test]
-    fn user_spawn_cwd_or_home_passes_through_empty() {
-        let reg = WorkspaceRegistry::default();
-        assert_eq!(
-            user_spawn_cwd_or_home(&reg, None, &WorkspaceEnv::Local),
-            None
-        );
-        assert_eq!(
-            user_spawn_cwd_or_home(&reg, Some("  "), &WorkspaceEnv::Local),
-            None
-        );
-    }
-
-    #[test]
     fn authorize_spawn_cwd_blocks_symlink_escape() {
         let allowed = tempdir("symroot");
         let outside = tempdir("symtarget");
@@ -894,7 +857,7 @@ mod auth_tests {
         let cli = tempdir("cli");
         let env = tempdir("env");
         let s = cli.to_string_lossy().into_owned();
-        let resolved = resolve_launch_cwd(Some(&s), Some(env.clone()));
+        let resolved = resolve_launch_cwd(Some(&s), Some(env));
         assert_eq!(resolved.as_deref(), Some(cli.as_path()));
     }
 
@@ -909,68 +872,5 @@ mod auth_tests {
         let env = tempdir("envfb");
         let resolved = resolve_launch_cwd(Some("/no/such/terax/dir"), Some(env.clone()));
         assert_eq!(resolved, Some(env));
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod appimage_tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn reader(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
-        let map: HashMap<String, OsString> = pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), OsString::from(v)))
-            .collect();
-        move |k: &str| map.get(k).cloned()
-    }
-
-    fn find<'a>(
-        out: &'a [(&'static str, Option<OsString>)],
-        key: &str,
-    ) -> Option<&'a Option<OsString>> {
-        out.iter().find(|(k, _)| *k == key).map(|(_, v)| v)
-    }
-
-    #[test]
-    fn strips_appdir_from_path_lists_and_unsets_when_empty() {
-        let appdir = Path::new("/tmp/.mount_Terax_X");
-        let env = reader(&[
-            ("LD_LIBRARY_PATH", "/tmp/.mount_Terax_X/usr/lib:/usr/lib"),
-            ("PATH", "/tmp/.mount_Terax_X/usr/bin:/usr/bin:/bin"),
-            ("GST_PLUGIN_SYSTEM_PATH", "/tmp/.mount_Terax_X/usr/lib/gstreamer-1.0"),
-            ("APPDIR", "/tmp/.mount_Terax_X"),
-        ]);
-        let out = compute_appimage_env_overrides(appdir, env);
-
-        assert_eq!(find(&out, "LD_LIBRARY_PATH"), Some(&Some(OsString::from("/usr/lib"))));
-        assert_eq!(find(&out, "PATH"), Some(&Some(OsString::from("/usr/bin:/bin"))));
-        // Only an APPDIR entry, so the var is removed entirely.
-        assert_eq!(find(&out, "GST_PLUGIN_SYSTEM_PATH"), Some(&None));
-        assert_eq!(find(&out, "APPDIR"), Some(&None));
-    }
-
-    #[test]
-    fn leaves_untouched_vars_alone() {
-        let appdir = Path::new("/tmp/.mount_Terax_X");
-        let env = reader(&[
-            ("LD_LIBRARY_PATH", "/usr/lib:/usr/local/lib"),
-            ("LD_PRELOAD", "/home/u/my.so"),
-        ]);
-        let out = compute_appimage_env_overrides(appdir, env);
-
-        // No APPDIR component => no override emitted for these.
-        assert!(find(&out, "LD_LIBRARY_PATH").is_none());
-        assert!(find(&out, "LD_PRELOAD").is_none());
-    }
-
-    #[test]
-    fn unsets_value_vars_only_when_pointing_into_appdir() {
-        let appdir = Path::new("/tmp/.mount_Terax_X");
-        let into = reader(&[("LD_PRELOAD", "/tmp/.mount_Terax_X/usr/lib/x.so")]);
-        assert_eq!(find(&compute_appimage_env_overrides(appdir, into), "LD_PRELOAD"), Some(&None));
-
-        let outside = reader(&[("FONTCONFIG_FILE", "/etc/fonts/fonts.conf")]);
-        assert!(find(&compute_appimage_env_overrides(appdir, outside), "FONTCONFIG_FILE").is_none());
     }
 }

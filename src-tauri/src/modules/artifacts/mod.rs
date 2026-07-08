@@ -1,0 +1,540 @@
+//! Artifact storage: versioned key-value blobs scoped to Pi conversation IDs, with create/update/edit/export/delete and React compilation support.
+
+pub mod edits;
+pub mod react;
+pub mod store;
+pub mod types;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+pub use edits::{apply_exact_edits, ArtifactTextEdit};
+pub use react::{compile_react_artifact, ReactCompileInput, ReactCompileResult};
+pub use store::{
+    Artifact, ArtifactBulkResult, ArtifactBulkTarget, ArtifactConversationArtifacts,
+    ArtifactCreateInput, ArtifactDeleteResult, ArtifactExportResult, ArtifactStore,
+    ArtifactSummary, ArtifactVersionSummary, DeletedArtifactSummary,
+};
+pub use types::{
+    conversation_key, normalize_slug, validate_conversation_id, ArtifactError, ArtifactKind,
+    ArtifactResult,
+};
+
+use crate::modules::pi::{pi_sessions_history, PiSessionsList};
+
+pub const ARTIFACT_UPDATE_EVENT_NAME: &str = "artifact:update";
+pub const ARTIFACT_DELETE_EVENT_NAME: &str = "artifact:delete";
+pub const ARTIFACT_CONVERSATION_DELETE_EVENT_NAME: &str = "artifact:conversation-delete";
+pub const MODEL_COMPARE_ARTIFACT_CONVERSATION_ID: &str = "model-compare";
+
+const APP_ARTIFACT_CONVERSATION_IDS: &[&str] = &[MODEL_COMPARE_ARTIFACT_CONVERSATION_ID];
+
+#[derive(Default)]
+pub struct ArtifactsState {
+    stores: Mutex<HashMap<PathBuf, ArtifactStore>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ArtifactUpdateReason {
+    Create,
+    Update,
+    Edit,
+    Save,
+    Rename,
+    Restore,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactUpdateEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub conversation_id: String,
+    pub artifact: ArtifactSummary,
+    pub reason: ArtifactUpdateReason,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactDeleteEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub conversation_id: String,
+    pub slug: String,
+    pub undo_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactConversationDeleteEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub conversation_id: String,
+    pub deleted_count: usize,
+}
+
+impl ArtifactsState {
+    pub fn store_for_app(&self, app: &AppHandle) -> ArtifactResult<ArtifactStore> {
+        let root = artifacts_root(app)?;
+        let mut stores = self
+            .stores
+            .lock()
+            .map_err(|error| ArtifactError::store_unavailable(error.to_string()))?;
+        Ok(stores
+            .entry(root.clone())
+            .or_insert_with(|| ArtifactStore::new(root))
+            .clone())
+    }
+}
+
+#[tauri::command]
+pub fn artifacts_list(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+) -> ArtifactResult<Vec<ArtifactSummary>> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    state.store_for_app(&app)?.list(&conversation_id)
+}
+
+#[tauri::command]
+pub fn artifacts_list_all(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+) -> ArtifactResult<Vec<ArtifactConversationArtifacts>> {
+    state.store_for_app(&app)?.list_all()
+}
+
+#[tauri::command]
+pub fn artifacts_list_deleted(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+) -> ArtifactResult<Vec<DeletedArtifactSummary>> {
+    state.store_for_app(&app)?.list_deleted()
+}
+
+#[tauri::command]
+pub fn artifacts_get(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    version: Option<u32>,
+) -> ArtifactResult<Artifact> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    state
+        .store_for_app(&app)?
+        .get(&conversation_id, &slug, version)
+}
+
+#[tauri::command]
+pub fn artifacts_compile_react(input: ReactCompileInput) -> ArtifactResult<ReactCompileResult> {
+    compile_react_artifact(input)
+}
+
+#[tauri::command]
+pub fn artifacts_create(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    input: ArtifactCreateInput,
+) -> ArtifactResult<Artifact> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let artifact = state.store_for_app(&app)?.create(&conversation_id, input)?;
+    emit_artifact_update(&app, artifact.summary.clone(), ArtifactUpdateReason::Create);
+    Ok(artifact)
+}
+
+#[tauri::command]
+pub fn artifacts_update(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    content: String,
+    base_version: Option<u32>,
+) -> ArtifactResult<Artifact> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let artifact =
+        state
+            .store_for_app(&app)?
+            .update(&conversation_id, &slug, &content, base_version)?;
+    emit_artifact_update(&app, artifact.summary.clone(), ArtifactUpdateReason::Save);
+    Ok(artifact)
+}
+
+#[tauri::command]
+pub fn artifacts_rename_title(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    title: String,
+) -> ArtifactResult<Artifact> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let artifact = state
+        .store_for_app(&app)?
+        .rename_title(&conversation_id, &slug, &title)?;
+    emit_artifact_update(&app, artifact.summary.clone(), ArtifactUpdateReason::Rename);
+    Ok(artifact)
+}
+
+#[tauri::command]
+pub fn artifacts_edit(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    edits: Vec<ArtifactTextEdit>,
+    base_version: Option<u32>,
+) -> ArtifactResult<Artifact> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let artifact =
+        state
+            .store_for_app(&app)?
+            .edit(&conversation_id, &slug, &edits, base_version)?;
+    emit_artifact_update(&app, artifact.summary.clone(), ArtifactUpdateReason::Edit);
+    Ok(artifact)
+}
+
+#[tauri::command]
+pub fn artifacts_versions(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+) -> ArtifactResult<Vec<ArtifactVersionSummary>> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    state.store_for_app(&app)?.versions(&conversation_id, &slug)
+}
+
+#[tauri::command]
+pub fn artifacts_export(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    destination_path: String,
+    version: Option<u32>,
+) -> ArtifactResult<ArtifactExportResult> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let destination = PathBuf::from(destination_path);
+    state
+        .store_for_app(&app)?
+        .export_to(&conversation_id, &slug, version, &destination)
+}
+
+#[tauri::command]
+pub fn artifacts_delete_many(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    targets: Vec<ArtifactBulkTarget>,
+) -> ArtifactResult<ArtifactBulkResult> {
+    let targets = validate_bulk_targets(&app, targets)?;
+    let result = state.store_for_app(&app)?.delete_many(&targets)?;
+    for item in result.items.iter().filter(|item| item.success) {
+        emit_artifact_delete(
+            &app,
+            item.conversation_id.clone(),
+            item.slug.clone(),
+            item.undo_token.clone(),
+        );
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn artifacts_delete(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+) -> ArtifactResult<ArtifactDeleteResult> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let slug = normalize_slug(&slug)?;
+    let result = state.store_for_app(&app)?.delete(&conversation_id, &slug)?;
+    emit_artifact_delete(&app, conversation_id, slug, result.undo_token.clone());
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn artifacts_restore_deleted(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    undo_token: Option<String>,
+) -> ArtifactResult<Artifact> {
+    let conversation_id = ensure_conversation_exists(&app, &conversation_id)?;
+    let slug = normalize_slug(&slug)?;
+    let artifact = state.store_for_app(&app)?.restore_deleted(
+        &conversation_id,
+        &slug,
+        undo_token.as_deref(),
+    )?;
+    emit_artifact_update(
+        &app,
+        artifact.summary.clone(),
+        ArtifactUpdateReason::Restore,
+    );
+    Ok(artifact)
+}
+
+#[tauri::command]
+pub fn artifacts_restore_deleted_many(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    targets: Vec<ArtifactBulkTarget>,
+) -> ArtifactResult<ArtifactBulkResult> {
+    let targets = validate_bulk_targets(&app, targets)?;
+    state.store_for_app(&app)?.restore_deleted_many(&targets)
+}
+
+#[tauri::command]
+pub fn artifacts_export_many(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    targets: Vec<ArtifactBulkTarget>,
+    destination_dir: String,
+) -> ArtifactResult<ArtifactBulkResult> {
+    let targets = validate_bulk_targets(&app, targets)?;
+    state
+        .store_for_app(&app)?
+        .export_many(&targets, &PathBuf::from(destination_dir))
+}
+
+#[tauri::command]
+pub fn artifacts_purge_deleted(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+    slug: String,
+    undo_token: String,
+) -> ArtifactResult<ArtifactDeleteResult> {
+    state
+        .store_for_app(&app)?
+        .purge_deleted(&conversation_id, &slug, &undo_token)
+}
+
+#[tauri::command]
+pub fn artifacts_delete_for_conversation(
+    app: AppHandle,
+    state: State<'_, ArtifactsState>,
+    conversation_id: String,
+) -> ArtifactResult<ArtifactDeleteResult> {
+    let conversation_id = validate_conversation_id(&conversation_id)?;
+    let result = state
+        .store_for_app(&app)?
+        .delete_conversation(&conversation_id)?;
+    emit_artifact_conversation_delete(&app, conversation_id, result.deleted_count);
+    Ok(result)
+}
+
+fn validate_bulk_targets(
+    app: &AppHandle,
+    targets: Vec<ArtifactBulkTarget>,
+) -> ArtifactResult<Vec<ArtifactBulkTarget>> {
+    targets
+        .into_iter()
+        .map(|target| {
+            Ok(ArtifactBulkTarget {
+                conversation_id: ensure_conversation_exists(app, &target.conversation_id)?,
+                slug: normalize_slug(&target.slug)?,
+                undo_token: target.undo_token,
+                version: target.version,
+            })
+        })
+        .collect()
+}
+
+fn artifacts_root(app: &AppHandle) -> ArtifactResult<PathBuf> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|error| ArtifactError::store_unavailable(error.to_string()))?
+        .join("artifacts"))
+}
+
+fn ensure_conversation_exists(app: &AppHandle, conversation_id: &str) -> ArtifactResult<String> {
+    let conversation_id = validate_conversation_id(conversation_id)?;
+    if is_app_artifact_conversation(&conversation_id) {
+        return Ok(conversation_id);
+    }
+
+    let history = pi_sessions_history(app.clone()).map_err(|error| {
+        ArtifactError::store_unavailable(format!(
+            "Pi session history could not be loaded: {}",
+            error.message
+        ))
+    })?;
+    ensure_history_contains_conversation(&history, &conversation_id)
+}
+
+fn ensure_history_contains_conversation(
+    history: &PiSessionsList,
+    conversation_id: &str,
+) -> ArtifactResult<String> {
+    let conversation_id = validate_conversation_id(conversation_id)?;
+    if is_app_artifact_conversation(&conversation_id) {
+        return Ok(conversation_id);
+    }
+    if history
+        .sessions
+        .iter()
+        .any(|session| session.id == conversation_id)
+    {
+        Ok(conversation_id)
+    } else {
+        Err(ArtifactError::unauthorized(
+            "artifact conversation does not reference a known Pi session",
+        ))
+    }
+}
+
+fn is_app_artifact_conversation(conversation_id: &str) -> bool {
+    APP_ARTIFACT_CONVERSATION_IDS.contains(&conversation_id)
+}
+
+fn artifact_update_payload(
+    artifact: ArtifactSummary,
+    reason: ArtifactUpdateReason,
+) -> ArtifactUpdateEvent {
+    ArtifactUpdateEvent {
+        event_type: ARTIFACT_UPDATE_EVENT_NAME.to_string(),
+        conversation_id: artifact.conversation_id.clone(),
+        artifact,
+        reason,
+    }
+}
+
+pub fn emit_artifact_update(
+    app: &AppHandle,
+    artifact: ArtifactSummary,
+    reason: ArtifactUpdateReason,
+) {
+    let payload = artifact_update_payload(artifact, reason);
+    if let Err(error) = app.emit(ARTIFACT_UPDATE_EVENT_NAME, payload) {
+        log::warn!("failed to emit artifact update event: {error}");
+    }
+}
+
+fn emit_artifact_delete(
+    app: &AppHandle,
+    conversation_id: String,
+    slug: String,
+    undo_token: Option<String>,
+) {
+    let payload = ArtifactDeleteEvent {
+        event_type: ARTIFACT_DELETE_EVENT_NAME.to_string(),
+        conversation_id,
+        slug,
+        undo_token,
+    };
+    if let Err(error) = app.emit(ARTIFACT_DELETE_EVENT_NAME, payload) {
+        log::warn!("failed to emit artifact delete event: {error}");
+    }
+}
+
+pub(crate) fn emit_artifact_conversation_delete(
+    app: &AppHandle,
+    conversation_id: String,
+    deleted_count: usize,
+) {
+    let payload = ArtifactConversationDeleteEvent {
+        event_type: ARTIFACT_CONVERSATION_DELETE_EVENT_NAME.to_string(),
+        conversation_id,
+        deleted_count,
+    };
+    if let Err(error) = app.emit(ARTIFACT_CONVERSATION_DELETE_EVENT_NAME, payload) {
+        log::warn!("failed to emit artifact conversation delete event: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::artifacts::store::ArtifactSummary;
+    use crate::modules::pi::{PiSession, PiSessionsList};
+
+    fn session(id: &str) -> PiSession {
+        PiSession {
+            id: id.to_string(),
+            title: "Test".to_string(),
+            cwd: None,
+            status: "idle".to_string(),
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000Z".to_string(),
+            last_prompt: None,
+            workspace_env: None,
+            thinking_level: None,
+            auth_mode: None,
+            provider_id: None,
+            model_id: None,
+            source_model_id: None,
+            base_url: None,
+            custom_endpoint_id: None,
+            sdk_session_file: None,
+            archived_at: None,
+            forked_from: None,
+        }
+    }
+
+    #[test]
+    fn ui_artifact_commands_require_known_pi_session_ids() {
+        let history = PiSessionsList {
+            sessions: vec![session("pi_known")],
+            events: Vec::new(),
+        };
+
+        assert!(ensure_history_contains_conversation(&history, "pi_known").is_ok());
+        assert_eq!(
+            ensure_history_contains_conversation(&history, "pi_missing")
+                .unwrap_err()
+                .code,
+            "ARTIFACT_UNAUTHORIZED"
+        );
+    }
+
+    #[test]
+    fn ui_artifact_commands_allow_model_compare_system_conversation() {
+        let history = PiSessionsList {
+            sessions: Vec::new(),
+            events: Vec::new(),
+        };
+
+        assert_eq!(
+            ensure_history_contains_conversation(&history, MODEL_COMPARE_ARTIFACT_CONVERSATION_ID)
+                .unwrap(),
+            MODEL_COMPARE_ARTIFACT_CONVERSATION_ID
+        );
+    }
+
+    #[test]
+    fn artifact_update_event_payload_never_contains_content() {
+        let summary = ArtifactSummary {
+            conversation_id: "pi_known".to_string(),
+            slug: "hero".to_string(),
+            title: "Hero".to_string(),
+            kind: ArtifactKind::Html,
+            version: 2,
+            content_hash: "a".repeat(64),
+            created_at: "2026-01-01T00:00:00.000Z".to_string(),
+            updated_at: "2026-01-01T00:00:01.000Z".to_string(),
+            content_bytes: 100_000,
+        };
+
+        let payload = artifact_update_payload(summary, ArtifactUpdateReason::Edit);
+        let value = serde_json::to_value(payload).unwrap();
+
+        assert_eq!(value["type"], "artifact:update");
+        assert_eq!(value["reason"], "edit");
+        assert!(value.get("content").is_none());
+        assert!(value["artifact"].get("content").is_none());
+        assert_eq!(value["artifact"]["contentBytes"], 100_000);
+    }
+}

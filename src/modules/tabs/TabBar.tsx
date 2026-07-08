@@ -192,6 +192,7 @@ export function TabBar({
   return (
     <div
       ref={scrollRef}
+      data-testid="tab-bar"
       data-tauri-drag-region
       className="min-w-0 shrink overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
@@ -533,6 +534,7 @@ export function TabBar({
             <Button
               variant="ghost"
               size="icon"
+              data-testid="new-tab-button"
               className="size-7 shrink-0 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
               title="New tab"
             >
@@ -544,7 +546,10 @@ export function TabBar({
             className="min-w-44"
             onCloseAutoFocus={(e) => e.preventDefault()}
           >
-            <DropdownMenuItem onSelect={() => onNew()}>
+            <DropdownMenuItem
+              data-testid="new-tab-terminal"
+              onSelect={() => onNew()}
+            >
               <HugeiconsIcon
                 icon={ComputerTerminal02Icon}
                 size={14}

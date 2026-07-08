@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
   push:
@@ -14,52 +15,61 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v6
 
       - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version: 24.16.0
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Audit (advisory)
+      - name: Audit (blocking on high/critical)
         run: pnpm audit --prod --audit-level high
-        continue-on-error: true
+
+      - name: Type-check
+        run: pnpm exec tsc --noEmit
 
       - name: Lint
         run: pnpm lint
 
-      - name: Type-check
-        run: pnpm check-types
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Build sidecars
+        run: pnpm build:sidecars
+
+      - name: Pi approval boundary
+        run: pnpm check:pi-boundary
+
+      - name: Updater key rotation wiring
+        run: pnpm check:updater-key-rotation
 
       - name: Test
         run: pnpm test
 
-      - name: React Compiler healthcheck (advisory)
-        run: pnpm exec react-compiler-healthcheck
-        continue-on-error: true
+      - name: Coverage floor
+        run: pnpm test:coverage
 
       - name: Build frontend
         run: pnpm build
 
-      - name: Size budget
-        run: pnpm size
-
-      - name: Dead code (advisory)
-        run: pnpm knip
-        continue-on-error: true
+      - name: Bundle-size budget
+        run: pnpm check:bundle-size
 
   rust:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v6
 
       - name: Install Linux build dependencies
         run: |
-          sudo apt-get update
+          sudo find /etc/apt -type f \( -name "*.list" -o -name "*.sources" \) -print0 \
+            | xargs -0r grep -lZ "packages.microsoft.com" \
+            | sudo xargs -0r rm -f
+          sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
@@ -76,24 +86,35 @@ jobs:
 
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest,cargo-machete
+          tool: cargo-nextest
+
+      - name: cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt -- --check
 
       - name: cargo check
         working-directory: src-tauri
         run: cargo check --all-targets --locked
 
+      - name: cargo check (workflow feature)
+        working-directory: src-tauri
+        run: cargo check --all-targets --locked --features workflow
+
       - name: cargo clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Unused crates (advisory)
+      - name: cargo clippy (workflow feature)
         working-directory: src-tauri
-        run: cargo machete
-        continue-on-error: true
+        run: cargo clippy --all-targets --locked --features workflow -- -D warnings
 
       - name: cargo nextest
         working-directory: src-tauri
         run: cargo nextest run --locked
+
+      - name: cargo nextest (workflow feature)
+        working-directory: src-tauri
+        run: cargo nextest run --locked --features workflow
 
   rust-platforms:
     name: rust-test (${{ matrix.os }})
@@ -103,9 +124,11 @@ jobs:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -119,19 +142,94 @@ jobs:
         working-directory: src-tauri
         run: cargo check --all-targets --locked
 
+      - name: cargo check (openclicky feature)
+        if: matrix.os == 'macos-latest'
+        working-directory: src-tauri
+        run: cargo check --all-targets --locked --features openclicky
+
+      - name: cargo clippy (openclicky feature)
+        if: matrix.os == 'macos-latest'
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked --features openclicky -- -D warnings
+
       - name: cargo nextest
         working-directory: src-tauri
         run: cargo nextest run --locked --retries 2
+
+      - name: cargo nextest (openclicky feature)
+        if: matrix.os == 'macos-latest'
+        working-directory: src-tauri
+        run: cargo nextest run --locked --features openclicky --retries 2
+
+  e2e:
+    name: e2e (linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo find /etc/apt -type f \( -name "*.list" -o -name "*.sources" \) -print0 \
+            | xargs -0r grep -lZ "packages.microsoft.com" \
+            | sudo xargs -0r rm -f
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            webkit2gtk-driver \
+            xvfb
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: e2e
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-driver
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Build release binary
+        env:
+          TAURI_CONFIG: >-
+            {"app":{"windows":[{"label":"main","title":"Terax","width":800,"height":600,"minWidth":420,"minHeight":280,"decorations":false,"transparent":true,"visible":true,"dragDropEnabled":true}]}}
+        run: pnpm tauri build --ci --no-bundle --config "$TAURI_CONFIG"
+
+      - name: Run e2e specs
+        env:
+          GDK_BACKEND: x11
+          NO_AT_BRIDGE: "1"
+          TERAX_E2E: "1"
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        run: xvfb-run -a pnpm e2e
 
   coverage:
     runs-on: ubuntu-22.04
     needs: rust
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v6
 
       - name: Install Linux build dependencies
         run: |
-          sudo apt-get update
+          sudo find /etc/apt -type f \( -name "*.list" -o -name "*.sources" \) -print0 \
+            | xargs -0r grep -lZ "packages.microsoft.com" \
+            | sudo xargs -0r rm -f
+          sudo apt-get -o Acquire::Retries=3 update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \

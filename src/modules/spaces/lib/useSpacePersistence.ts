@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import type { Tab } from "@/modules/tabs";
+import { DEFAULT_SPACE_ID, type Tab } from "@/modules/tabs";
 import { isSerializableTab, serializeTabs } from "./serialize";
 import { saveState } from "./store";
 import { useSpaces } from "./useSpaces";
@@ -42,9 +42,10 @@ export function useSpacePersistence({
   const flush = useCallback((snap: Snapshot) => {
     const groups = new Map<string, Tab[]>();
     for (const t of snap.tabs) {
-      const arr = groups.get(t.spaceId);
+      const spaceId = t.spaceId ?? DEFAULT_SPACE_ID;
+      const arr = groups.get(spaceId);
       if (arr) arr.push(t);
-      else groups.set(t.spaceId, [t]);
+      else groups.set(spaceId, [t]);
     }
 
     for (const [spaceId, group] of groups) {

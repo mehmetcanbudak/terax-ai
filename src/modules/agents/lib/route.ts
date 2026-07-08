@@ -2,13 +2,18 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import { showAgentToast } from "../components/AgentToast";
 import { useAgentStore } from "../store/agentStore";
 import { osNotify } from "./notify";
-import type { AgentSource, NotificationKind } from "./types";
+import type {
+  AgentNotificationCategory,
+  AgentSource,
+  NotificationKind,
+} from "./types";
 
 type RouteArgs = {
   source: AgentSource;
   agent: string;
   kind: NotificationKind;
   title: string;
+  category?: AgentNotificationCategory;
   body?: string;
   focused: boolean;
   /** True when the user is currently looking at this agent. */
@@ -18,6 +23,7 @@ type RouteArgs = {
   tabId?: number;
   leafId?: number;
   onActivate: () => void;
+  piSessionId?: string;
 };
 
 export function routeAgentNotification({
@@ -32,11 +38,23 @@ export function routeAgentNotification({
   tabId = 0,
   leafId = 0,
   onActivate,
+  piSessionId,
+  category,
 }: RouteArgs): void {
   if (!usePreferencesStore.getState().agentNotifications) return;
   if (focused && visible) return;
 
-  useAgentStore.getState().pushNotification({ source, agent, kind, tabId, leafId });
+  useAgentStore.getState().pushNotification({
+    source,
+    agent,
+    kind,
+    tabId,
+    leafId,
+    title,
+    ...(category ? { category } : {}),
+    ...(body ? { body } : {}),
+    ...(piSessionId ? { piSessionId } : {}),
+  });
 
   if (!focused) {
     void osNotify(title, body ?? agent);

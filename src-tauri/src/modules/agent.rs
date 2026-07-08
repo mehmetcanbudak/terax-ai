@@ -1,192 +1,295 @@
-use serde_json::{json, Value};
+//! Local AI agent hook management: install/uninstall Claude, Codex, Gemini, and Antigravity hooks into provider configuration files.
 
-// How a given agent's hook delivers our OSC 777 marker into the terminal.
+use serde_json::{json, Map, Value};
+use std::path::{Path, PathBuf};
+
 #[derive(Clone, Copy)]
-enum Delivery {
-    // Claude returns the sequence via a `terminalSequence` JSON field (it lost
-    // /dev/tty access in v2.1.139) and emits it in-band. Cross-platform.
-    TerminalSequence,
-    // Codex/Gemini hooks can't write to the terminal, so the hook command emits
-    // the marker itself: to /dev/tty on Unix, via a CONOUT$ helper on Windows.
-    Osc,
+struct HookEvent {
+    name: &'static str,
+    marker: &'static str,
 }
 
-struct AgentSpec {
-    agent: &'static str,
-    dir: &'static str,
-    file: &'static str,
-    events: &'static [(&'static str, &'static str)],
-    matcher: bool,
-    delivery: Delivery,
+#[derive(Clone, Copy)]
+struct ProviderHooks {
+    events: &'static [HookEvent],
+    marker_prefix: &'static str,
+    owned_markers: &'static [&'static str],
+    hook_group: fn(&str) -> Value,
 }
 
-const AGENTS: &[AgentSpec] = &[
-    AgentSpec {
-        agent: "claude",
-        dir: ".claude",
-        file: "settings.json",
-        events: &[
-            ("UserPromptSubmit", "working"),
-            ("Notification", "attention"),
-            ("Stop", "finished"),
-        ],
-        matcher: false,
-        delivery: Delivery::TerminalSequence,
+impl ProviderHooks {
+    fn claude() -> Self {
+        Self {
+            events: &CLAUDE_HOOK_EVENTS,
+            marker_prefix: "notify;Terax;",
+            owned_markers: &CLAUDE_OWNED_MARKERS,
+            hook_group: claude_hook_group,
+        }
+    }
+
+    fn codex() -> Self {
+        Self {
+            events: &CODEX_HOOK_EVENTS,
+            marker_prefix: "notify;Terax;codex;",
+            owned_markers: &CODEX_OWNED_MARKERS,
+            hook_group: codex_hook_group,
+        }
+    }
+
+    fn gemini() -> Self {
+        Self {
+            events: &GOOGLE_AGENT_HOOK_EVENTS,
+            marker_prefix: "notify;Terax;gemini;",
+            owned_markers: &GEMINI_OWNED_MARKERS,
+            hook_group: gemini_hook_group,
+        }
+    }
+
+    fn antigravity() -> Self {
+        Self {
+            events: &GOOGLE_AGENT_HOOK_EVENTS,
+            marker_prefix: "notify;Terax;antigravity;",
+            owned_markers: &ANTIGRAVITY_OWNED_MARKERS,
+            hook_group: antigravity_hook_group,
+        }
+    }
+
+    fn marker_text(self, marker: &str) -> String {
+        format!("{}{marker}", self.marker_prefix)
+    }
+}
+
+const CLAUDE_HOOK_EVENTS: [HookEvent; 3] = [
+    HookEvent {
+        name: "UserPromptSubmit",
+        marker: "working",
     },
-    AgentSpec {
-        agent: "codex",
-        dir: ".codex",
-        file: "hooks.json",
-        events: &[
-            ("UserPromptSubmit", "working"),
-            ("PermissionRequest", "attention"),
-            ("Stop", "finished"),
-        ],
-        matcher: false,
-        delivery: Delivery::Osc,
+    HookEvent {
+        name: "Notification",
+        marker: "attention",
     },
-    AgentSpec {
-        agent: "gemini",
-        dir: ".gemini",
-        file: "settings.json",
-        events: &[
-            ("BeforeAgent", "working"),
-            ("Notification", "attention"),
-            ("AfterAgent", "finished"),
-        ],
-        matcher: true,
-        delivery: Delivery::Osc,
+    HookEvent {
+        name: "Stop",
+        marker: "finished",
     },
 ];
 
-// Substrings identifying a hook command as ours, across every form we've ever
-// emitted (legacy /dev/tty Claude, current TerminalSequence, Osc, Windows
-// helper). Used to prune our own groups before reinserting so installs are
-// idempotent and migrate older markers.
-const OWNED_MARKERS: [&str; 3] = ["notify;Terax;", "terax;notify", "__terax_notify"];
+const CODEX_HOOK_EVENTS: [HookEvent; 3] = [
+    HookEvent {
+        name: "UserPromptSubmit",
+        marker: "working",
+    },
+    HookEvent {
+        name: "PermissionRequest",
+        marker: "attention",
+    },
+    HookEvent {
+        name: "Stop",
+        marker: "finished",
+    },
+];
 
-fn find(agent: &str) -> Result<&'static AgentSpec, String> {
-    AGENTS
-        .iter()
-        .find(|s| s.agent == agent)
-        .ok_or_else(|| format!("unknown agent {agent}"))
-}
+const GOOGLE_AGENT_HOOK_EVENTS: [HookEvent; 3] = [
+    HookEvent {
+        name: "BeforeAgent",
+        marker: "working",
+    },
+    HookEvent {
+        name: "AfterAgent",
+        marker: "finished",
+    },
+    HookEvent {
+        name: "Notification",
+        marker: "attention",
+    },
+];
 
-fn hook_command(spec: &AgentSpec, event: &str) -> String {
-    match spec.delivery {
-        Delivery::TerminalSequence => format!(
-            r#"[ -n "$TERAX_TERMINAL" ] && printf '{{"terminalSequence":"\\u001b]777;notify;Terax;{event}\\u0007"}}' || true"#
-        ),
-        Delivery::Osc => osc_command(spec.agent, event),
-    }
-}
+const CLAUDE_OWNED_MARKERS: [&str; 2] = ["notify;Terax;", "terax;notify"];
+const CODEX_OWNED_MARKERS: [&str; 1] = ["notify;Terax;codex;"];
+const GEMINI_OWNED_MARKERS: [&str; 1] = ["notify;Terax;gemini;"];
+const ANTIGRAVITY_OWNED_MARKERS: [&str; 1] = ["notify;Terax;antigravity;"];
 
-// Marker to the tty, then `{}` on stdout: Codex/Gemini require a JSON no-op.
-#[cfg(unix)]
-fn osc_command(agent: &str, event: &str) -> String {
+fn claude_hook_cmd(event: &str) -> String {
     format!(
-        r#"[ -n "$TERAX_TERMINAL" ] && printf '\033]777;notify;Terax;{agent};{event}\007' > /dev/tty; printf '{{}}'"#
+        r#"[ -n "$TERAX_TERMINAL" ] && printf '{{"terminalSequence":"\\u001b]777;notify;Terax;{event}\\u0007"}}' || true"#
     )
 }
 
-#[cfg(windows)]
-fn osc_command(agent: &str, event: &str) -> String {
-    let exe = std::env::current_exe()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "terax.exe".to_string());
-    format!(r#""{exe}" __terax_notify {agent} {event}"#)
+fn codex_hook_cmd(event: &str) -> String {
+    format!(
+        r#"[ -n "$TERAX_TERMINAL" ] && {{ printf '\033]777;notify;Terax;codex;{event}\007' 2>/dev/null > /dev/tty || printf '\033]777;notify;Terax;codex;{event}\007' 2>/dev/null > "/proc/$PPID/fd/1" || true; }}"#
+    )
 }
 
-// The stable substring that proves a given (agent, event) hook is installed.
-// Kept in sync with hook_command so status reflects what enable writes.
-fn status_needle(spec: &AgentSpec, event: &str) -> String {
-    match spec.delivery {
-        Delivery::TerminalSequence => format!("notify;Terax;{event}"),
-        Delivery::Osc => {
-            #[cfg(unix)]
-            {
-                format!("notify;Terax;{};{event}", spec.agent)
-            }
-            #[cfg(windows)]
-            {
-                format!("__terax_notify {} {event}", spec.agent)
-            }
-        }
-    }
+fn codex_windows_hook_cmd(event: &str) -> String {
+    format!(
+        r#"powershell -NoProfile -Command "if ($env:TERAX_TERMINAL) {{ $s = [string][char]27 + ']777;notify;Terax;codex;{event}' + [string][char]7; $bytes = [System.Text.Encoding]::UTF8.GetBytes($s); $out = [System.IO.File]::OpenWrite('\\.\CONOUT$'); try {{ $out.Write($bytes, 0, $bytes.Length) }} finally {{ $out.Dispose() }} }}""#
+    )
 }
 
-fn is_ours(group: &Value) -> bool {
+// Google-agent hooks consume stdout as hook output, so status markers need to
+// be written to the user's terminal device instead of ordinary stdout.
+fn provider_hook_cmd(provider: &str, event: &str) -> String {
+    format!(
+        r#"[ -n "$TERAX_TERMINAL" ] && {{ printf '\033]777;notify;Terax;{provider};{event}\007' 2>/dev/null > /dev/tty || printf '\033]777;notify;Terax;{provider};{event}\007' 2>/dev/null > "/proc/$PPID/fd/1" || true; }}"#
+    )
+}
+
+fn google_agent_hook_group(provider: &str, event: &str) -> Value {
+    // Gemini-compatible hook configs currently document `command` only (no
+    // Codex-style `commandWindows` override), so keep this guarded and no-op
+    // outside Terax terminals instead of writing an unsupported field.
+    json!({
+        "hooks": [{
+            "type": "command",
+            "command": provider_hook_cmd(provider, event),
+            "name": format!("terax-{provider}-{event}"),
+            "timeout": 5000,
+        }]
+    })
+}
+
+fn claude_hook_group(event: &str) -> Value {
+    json!({
+        "hooks": [{ "type": "command", "command": claude_hook_cmd(event) }]
+    })
+}
+
+fn codex_hook_group(event: &str) -> Value {
+    json!({
+        "hooks": [{
+            "type": "command",
+            "command": codex_hook_cmd(event),
+            "commandWindows": codex_windows_hook_cmd(event),
+        }]
+    })
+}
+
+fn gemini_hook_group(event: &str) -> Value {
+    google_agent_hook_group("gemini", event)
+}
+
+fn antigravity_hook_group(event: &str) -> Value {
+    google_agent_hook_group("antigravity", event)
+}
+
+fn is_ours(group: &Value, spec: ProviderHooks) -> bool {
     group
         .get("hooks")
         .and_then(Value::as_array)
-        .is_some_and(|hs| {
-            hs.iter().any(|h| {
-                h.get("command")
-                    .and_then(Value::as_str)
-                    .is_some_and(|c| OWNED_MARKERS.iter().any(|m| c.contains(m)))
+        .is_some_and(|hooks| {
+            hooks.iter().any(|hook| {
+                ["command", "commandWindows"].iter().any(|key| {
+                    hook.get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| {
+                            spec.owned_markers
+                                .iter()
+                                .any(|marker| command.contains(marker))
+                        })
+                })
             })
         })
 }
 
-// A group with no hooks is inert cruft (e.g. left behind when someone deletes
-// our command but not its wrapper). Drop it so the file stays clean.
 fn is_empty_group(group: &Value) -> bool {
     group
         .get("hooks")
         .and_then(Value::as_array)
-        .is_none_or(|hs| hs.is_empty())
+        .is_none_or(|hooks| hooks.is_empty())
 }
 
-fn merge_hooks(mut root: Value, spec: &AgentSpec) -> Value {
-    if !root.is_object() {
-        root = json!({});
-    }
-    let obj = root.as_object_mut().unwrap();
+fn merge_provider_hooks(root: Value, spec: ProviderHooks) -> Value {
+    let mut obj = match root {
+        Value::Object(obj) => obj,
+        _ => Map::new(),
+    };
     let hooks = obj.entry("hooks").or_insert_with(|| json!({}));
     if !hooks.is_object() {
         *hooks = json!({});
     }
-    let hooks = hooks.as_object_mut().unwrap();
+    let Value::Object(hooks) = hooks else {
+        return Value::Object(obj);
+    };
 
-    for (event, marker) in spec.events {
-        let arr = hooks.entry(*event).or_insert_with(|| json!([]));
+    for event in spec.events {
+        let arr = hooks.entry(event.name).or_insert_with(|| json!([]));
         if !arr.is_array() {
             *arr = json!([]);
         }
-        let arr = arr.as_array_mut().unwrap();
-        arr.retain(|group| !is_ours(group) && !is_empty_group(group));
-        let mut group = json!({
-            "hooks": [ { "type": "command", "command": hook_command(spec, marker) } ]
-        });
-        if spec.matcher {
-            group["matcher"] = json!("*");
+        if let Value::Array(arr) = arr {
+            arr.retain(|group| !is_ours(group, spec) && !is_empty_group(group));
+            arr.push((spec.hook_group)(event.marker));
         }
-        arr.push(group);
     }
-    root
+    Value::Object(obj)
 }
 
-fn existing_config(contents: Option<&str>, path: &std::path::Path) -> Result<Value, String> {
+#[cfg(test)]
+fn merge_hooks(root: Value) -> Value {
+    merge_provider_hooks(root, ProviderHooks::claude())
+}
+
+fn existing_config(contents: Option<&str>, path: &Path) -> Result<Value, String> {
     match contents {
         Some(s) if !s.trim().is_empty() => serde_json::from_str::<Value>(s).map_err(|e| {
-            format!("{} is not valid JSON ({e}); refusing to overwrite", path.display())
+            format!(
+                "{} is not valid JSON ({e}); refusing to overwrite",
+                path.display()
+            )
         }),
         _ => Ok(json!({})),
     }
 }
 
-fn settings_path(spec: &AgentSpec) -> Result<std::path::PathBuf, String> {
+fn claude_settings_path() -> Result<PathBuf, String> {
     Ok(dirs::home_dir()
         .ok_or_else(|| "could not resolve home dir".to_string())?
-        .join(spec.dir)
-        .join(spec.file))
+        .join(".claude")
+        .join("settings.json"))
 }
 
-#[tauri::command]
-pub fn agent_enable_hooks(agent: String) -> Result<(), String> {
-    let spec = find(&agent)?;
-    let path = settings_path(spec)?;
-    let dir = path.parent().unwrap();
+fn codex_hooks_path() -> Result<PathBuf, String> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| "could not resolve home dir".to_string())?
+        .join(".codex")
+        .join("hooks.json"))
+}
+
+fn gemini_settings_path() -> Result<PathBuf, String> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| "could not resolve home dir".to_string())?
+        .join(".gemini")
+        .join("settings.json"))
+}
+
+fn antigravity_settings_path() -> Result<PathBuf, String> {
+    // Antigravity CLI keeps its Gemini-compatible settings under ~/.gemini but
+    // in its own config file. Provider-qualified markers keep hook groups
+    // idempotent even if Google agents eventually share a settings surface.
+    Ok(dirs::home_dir()
+        .ok_or_else(|| "could not resolve home dir".to_string())?
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("settings.json"))
+}
+
+fn hook_target(agent: &str) -> Result<(PathBuf, ProviderHooks), String> {
+    match agent.trim().to_ascii_lowercase().as_str() {
+        "claude" | "claude-code" => Ok((claude_settings_path()?, ProviderHooks::claude())),
+        "codex" => Ok((codex_hooks_path()?, ProviderHooks::codex())),
+        "gemini" => Ok((gemini_settings_path()?, ProviderHooks::gemini())),
+        "antigravity" | "google-antigravity" => {
+            Ok((antigravity_settings_path()?, ProviderHooks::antigravity()))
+        }
+        other => Err(format!("unsupported agent hooks provider: {other}")),
+    }
+}
+
+fn enable_hooks_at(path: PathBuf, spec: ProviderHooks) -> Result<(), String> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 
     let existing = match std::fs::read_to_string(&path) {
@@ -195,73 +298,116 @@ pub fn agent_enable_hooks(agent: String) -> Result<(), String> {
         Err(e) => return Err(format!("read {}: {e}", path.display())),
     };
 
-    let merged = merge_hooks(existing, spec);
+    let merged = merge_provider_hooks(existing, spec);
     let out = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
 
-    // Write to a sibling temp file then rename so a crash mid-write can't leave
-    // a truncated config.
-    let tmp = path.with_extension("terax-tmp");
+    let tmp = path.with_extension("json.terax-tmp");
     std::fs::write(&tmp, out).map_err(|e| format!("write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
+        if let Err(cleanup_err) = std::fs::remove_file(&tmp) {
+            log::debug!("agent hook cleanup failed: {cleanup_err}");
+        }
         format!("rename into {}: {e}", path.display())
     })?;
     Ok(())
 }
 
-// The raw OSC 777 bytes the detector parses. Kept in one place so the Windows
-// CONOUT$ path can't drift from what the Unix /dev/tty hook emits.
-#[cfg(any(windows, test))]
-fn conout_marker(agent: &str, event: &str) -> String {
-    format!("\x1b]777;notify;Terax;{agent};{event}\x07")
+fn hooks_status_at(path: PathBuf, spec: ProviderHooks) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(root) = serde_json::from_str::<Value>(&content) else {
+        return false;
+    };
+
+    spec.events.iter().all(|event| {
+        let marker = spec.marker_text(event.marker);
+        root.get("hooks")
+            .and_then(|hooks| hooks.get(event.name))
+            .and_then(Value::as_array)
+            .is_some_and(|groups| {
+                groups.iter().any(|group| {
+                    group
+                        .get("hooks")
+                        .and_then(Value::as_array)
+                        .is_some_and(|hooks| {
+                            hooks.iter().any(|hook| {
+                                ["command", "commandWindows"].iter().any(|key| {
+                                    hook.get(key)
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|command| command.contains(&marker))
+                                })
+                            })
+                        })
+                })
+            })
+    })
 }
 
-// Windows has no /dev/tty: the hook calls `terax.exe __terax_notify ...` and we
-// write the marker into the ConPTY console. GUI-subsystem release inherits no
-// console, so attach to the hook runner's first.
-#[cfg(windows)]
-pub fn emit_conout_marker(agent: &str, event: &str) {
-    use std::io::Write;
-    use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
-
-    if std::env::var_os("TERAX_TERMINAL").is_none() {
-        return;
-    }
-    unsafe {
-        AttachConsole(ATTACH_PARENT_PROCESS);
-    }
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("CONOUT$")
-    {
-        let _ = f.write_all(conout_marker(agent, event).as_bytes());
-    }
+#[tauri::command]
+pub fn agent_enable_hooks(agent: String) -> Result<(), String> {
+    let (path, spec) = hook_target(&agent)?;
+    enable_hooks_at(path, spec)
 }
 
 #[tauri::command]
 pub fn agent_hooks_status(agent: String) -> bool {
-    let Ok(spec) = find(&agent) else {
-        return false;
-    };
-    let Some(content) = settings_path(spec)
-        .ok()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-    else {
-        return false;
-    };
-    spec.events
-        .iter()
-        .all(|(_, m)| content.contains(&status_needle(spec, m)))
+    hook_target(&agent)
+        .map(|(path, spec)| hooks_status_at(path, spec))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn agent_enable_claude_hooks() -> Result<(), String> {
+    enable_hooks_at(claude_settings_path()?, ProviderHooks::claude())
+}
+
+#[tauri::command]
+pub fn agent_claude_hooks_status() -> bool {
+    claude_settings_path()
+        .map(|path| hooks_status_at(path, ProviderHooks::claude()))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn agent_enable_codex_hooks() -> Result<(), String> {
+    enable_hooks_at(codex_hooks_path()?, ProviderHooks::codex())
+}
+
+#[tauri::command]
+pub fn agent_codex_hooks_status() -> bool {
+    codex_hooks_path()
+        .map(|path| hooks_status_at(path, ProviderHooks::codex()))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn agent_enable_gemini_hooks() -> Result<(), String> {
+    enable_hooks_at(gemini_settings_path()?, ProviderHooks::gemini())
+}
+
+#[tauri::command]
+pub fn agent_gemini_hooks_status() -> bool {
+    gemini_settings_path()
+        .map(|path| hooks_status_at(path, ProviderHooks::gemini()))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn agent_enable_antigravity_hooks() -> Result<(), String> {
+    enable_hooks_at(antigravity_settings_path()?, ProviderHooks::antigravity())
+}
+
+#[tauri::command]
+pub fn agent_antigravity_hooks_status() -> bool {
+    antigravity_settings_path()
+        .map(|path| hooks_status_at(path, ProviderHooks::antigravity()))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn spec(agent: &str) -> &'static AgentSpec {
-        find(agent).unwrap()
-    }
 
     fn hook_count(root: &Value, event: &str) -> usize {
         root["hooks"][event].as_array().map_or(0, Vec::len)
@@ -275,8 +421,8 @@ mod tests {
     }
 
     #[test]
-    fn claude_adds_all_event_hooks_to_empty_config() {
-        let out = merge_hooks(json!({}), spec("claude"));
+    fn adds_all_event_hooks_to_empty_config() {
+        let out = merge_hooks(json!({}));
         assert_eq!(hook_count(&out, "UserPromptSubmit"), 1);
         assert_eq!(hook_count(&out, "Notification"), 1);
         assert_eq!(hook_count(&out, "Stop"), 1);
@@ -288,46 +434,11 @@ mod tests {
     }
 
     #[test]
-    fn is_idempotent_per_agent() {
-        for agent in ["claude", "codex", "gemini"] {
-            let s = spec(agent);
-            let once = merge_hooks(json!({}), s);
-            let twice = merge_hooks(once.clone(), s);
-            assert_eq!(once, twice, "{agent} not idempotent");
-        }
-    }
-
-    #[test]
-    fn conout_marker_matches_detector_format() {
-        // Exactly the bytes pty/agent_detect parses (ESC ] 777 ; ... BEL).
-        assert_eq!(
-            conout_marker("gemini", "attention"),
-            "\u{1b}]777;notify;Terax;gemini;attention\u{7}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn codex_emits_four_field_dev_tty_marker() {
-        let out = merge_hooks(json!({}), spec("codex"));
-        assert_eq!(hook_count(&out, "UserPromptSubmit"), 1);
-        assert_eq!(hook_count(&out, "PermissionRequest"), 1);
-        assert_eq!(hook_count(&out, "Stop"), 1);
-        let stop = command(&out, "Stop", 0);
-        assert!(stop.contains("notify;Terax;codex;finished"));
-        assert!(stop.contains("> /dev/tty"));
-        // Codex Stop rejects empty/non-JSON stdout; the hook must emit a no-op.
-        assert!(stop.contains("printf '{}'"));
-        assert!(!stop.contains("terminalSequence"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn gemini_uses_matcher_and_named_marker() {
-        let out = merge_hooks(json!({}), spec("gemini"));
-        assert_eq!(out["hooks"]["BeforeAgent"][0]["matcher"], "*");
-        assert!(command(&out, "AfterAgent", 0).contains("notify;Terax;gemini;finished"));
-        assert!(command(&out, "Notification", 0).contains("notify;Terax;gemini;attention"));
+    fn is_idempotent() {
+        let once = merge_hooks(json!({}));
+        let twice = merge_hooks(once.clone());
+        assert_eq!(once, twice);
+        assert_eq!(hook_count(&twice, "Notification"), 1);
     }
 
     #[test]
@@ -335,14 +446,14 @@ mod tests {
         let legacy = json!({
             "hooks": {
                 "Notification": [
-                    { "hooks": [ {
+                    { "hooks": [{
                         "type": "command",
                         "command": "[ -n \"$TERAX_TERMINAL\" ] && printf '\\033]777;terax;notify\\033\\\\' > /dev/tty || true"
-                    } ] }
+                    }]}
                 ]
             }
         });
-        let out = merge_hooks(legacy, spec("claude"));
+        let out = merge_hooks(legacy);
         assert_eq!(hook_count(&out, "Notification"), 1);
         assert!(command(&out, "Notification", 0).contains("terminalSequence"));
         assert!(!command(&out, "Notification", 0).contains("/dev/tty"));
@@ -354,20 +465,74 @@ mod tests {
             "permissions": { "allow": ["Bash"] },
             "hooks": {
                 "Notification": [
-                    { "hooks": [ { "type": "command", "command": "say hi" } ] }
+                    { "hooks": [{ "type": "command", "command": "say hi" }] }
                 ]
             }
         });
-        let out = merge_hooks(input, spec("claude"));
+        let out = merge_hooks(input);
         assert_eq!(out["permissions"]["allow"][0], "Bash");
         assert_eq!(hook_count(&out, "Notification"), 2);
         assert_eq!(command(&out, "Notification", 0), "say hi");
     }
 
     #[test]
-    fn replaces_non_object_root() {
-        let out = merge_hooks(json!("garbage"), spec("codex"));
+    fn adds_codex_hooks_with_provider_qualified_markers() {
+        let out = merge_provider_hooks(json!({}), ProviderHooks::codex());
+        assert_eq!(hook_count(&out, "UserPromptSubmit"), 1);
+        assert_eq!(hook_count(&out, "PermissionRequest"), 1);
         assert_eq!(hook_count(&out, "Stop"), 1);
+        assert!(command(&out, "PermissionRequest", 0).contains("notify;Terax;codex;attention"));
+        assert!(
+            out["hooks"]["PermissionRequest"][0]["hooks"][0]["commandWindows"]
+                .as_str()
+                .unwrap()
+                .contains("notify;Terax;codex;attention")
+        );
+    }
+
+    #[test]
+    fn adds_gemini_hooks_with_provider_qualified_markers() {
+        let out = merge_provider_hooks(json!({}), ProviderHooks::gemini());
+        assert_eq!(hook_count(&out, "BeforeAgent"), 1);
+        assert_eq!(hook_count(&out, "AfterAgent"), 1);
+        assert_eq!(hook_count(&out, "Notification"), 1);
+        assert!(command(&out, "BeforeAgent", 0).contains("notify;Terax;gemini;working"));
+        assert!(command(&out, "AfterAgent", 0).contains("notify;Terax;gemini;finished"));
+        assert_eq!(
+            out["hooks"]["BeforeAgent"][0]["hooks"][0]["name"],
+            "terax-gemini-working"
+        );
+    }
+
+    #[test]
+    fn adds_antigravity_hooks_with_provider_qualified_markers() {
+        let out = merge_provider_hooks(json!({}), ProviderHooks::antigravity());
+        assert_eq!(hook_count(&out, "BeforeAgent"), 1);
+        assert_eq!(hook_count(&out, "AfterAgent"), 1);
+        assert_eq!(hook_count(&out, "Notification"), 1);
+        assert!(command(&out, "Notification", 0).contains("notify;Terax;antigravity;attention"));
+        assert_eq!(
+            out["hooks"]["Notification"][0]["hooks"][0]["name"],
+            "terax-antigravity-attention"
+        );
+    }
+
+    #[test]
+    fn provider_hook_merge_preserves_other_provider_hooks() {
+        let claude = merge_provider_hooks(json!({}), ProviderHooks::claude());
+        let codex = merge_provider_hooks(claude, ProviderHooks::codex());
+        let gemini = merge_provider_hooks(codex, ProviderHooks::gemini());
+        let all = merge_provider_hooks(gemini, ProviderHooks::antigravity());
+        assert_eq!(hook_count(&all, "UserPromptSubmit"), 2);
+        assert_eq!(hook_count(&all, "Notification"), 3);
+        assert_eq!(hook_count(&all, "PermissionRequest"), 1);
+        assert_eq!(hook_count(&all, "BeforeAgent"), 2);
+    }
+
+    #[test]
+    fn replaces_non_object_root() {
+        let out = merge_hooks(json!("garbage"));
+        assert_eq!(hook_count(&out, "Notification"), 1);
     }
 
     #[test]
@@ -376,25 +541,25 @@ mod tests {
             "hooks": {
                 "Notification": [
                     { "hooks": [] },
-                    { "hooks": [ { "type": "command", "command": hook_command(spec("claude"), "attention") } ] }
+                    { "hooks": [{ "type": "command", "command": claude_hook_cmd("attention") }] }
                 ]
             }
         });
-        let out = merge_hooks(input, spec("claude"));
+        let out = merge_hooks(input);
         assert_eq!(hook_count(&out, "Notification"), 1);
         assert!(command(&out, "Notification", 0).contains("notify;Terax;attention"));
     }
 
     #[test]
     fn existing_config_absent_or_empty_starts_fresh() {
-        let p = std::path::Path::new("/x/settings.json");
+        let p = Path::new("/x/settings.json");
         assert_eq!(existing_config(None, p).unwrap(), json!({}));
         assert_eq!(existing_config(Some("   \n"), p).unwrap(), json!({}));
     }
 
     #[test]
     fn existing_config_refuses_to_clobber_invalid_json() {
-        let p = std::path::Path::new("/x/settings.json");
+        let p = Path::new("/x/settings.json");
         assert!(existing_config(Some("{ not json,"), p).is_err());
         assert_eq!(
             existing_config(Some(r#"{"permissions":{}}"#), p).unwrap(),

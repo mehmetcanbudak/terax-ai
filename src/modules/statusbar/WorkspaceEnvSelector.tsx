@@ -1,6 +1,10 @@
+import Refresh01Icon from "@hugeicons/core-free-icons/Refresh01Icon";
+import ServerStack03Icon from "@hugeicons/core-free-icons/ServerStack03Icon";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -11,8 +15,6 @@ import {
   useWorkspaceEnvStore,
   type WorkspaceEnv,
 } from "@/modules/workspace";
-import { Refresh01Icon, ServerStack03Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 
 type Props = {
   onSelect: (env: WorkspaceEnv) => void;
@@ -52,33 +54,39 @@ export function WorkspaceEnvSelector({ onSelect }: Props) {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-48">
-        <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
-          Windows Local
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {distros.length === 0 ? (
-          <DropdownMenuItem disabled>
-            {loading
-              ? "Loading WSL distros..."
-              : error
-                ? "WSL unavailable"
-                : "No WSL distros found"}
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
+            Windows Local
           </DropdownMenuItem>
-        ) : (
-          distros.map((distro) => (
-            <DropdownMenuItem
-              key={distro.name}
-              onSelect={() => onSelect({ kind: "wsl", distro: distro.name })}
-            >
-              WSL: {distro.name}
-            </DropdownMenuItem>
-          ))
-        )}
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => void refreshDistros()}>
-          <HugeiconsIcon icon={Refresh01Icon} size={13} strokeWidth={1.75} />
-          Refresh
-        </DropdownMenuItem>
+        <DropdownMenuGroup>
+          {distros.length === 0 ? (
+            <DropdownMenuItem disabled>
+              {loading
+                ? "Loading WSL distros..."
+                : error
+                  ? "WSL unavailable"
+                  : "No WSL distros found"}
+            </DropdownMenuItem>
+          ) : (
+            distros.map((distro) => (
+              <DropdownMenuItem
+                key={distro.name}
+                onSelect={() => onSelect({ kind: "wsl", distro: distro.name })}
+              >
+                WSL: {distro.name}
+              </DropdownMenuItem>
+            ))
+          )}
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem onSelect={() => void refreshDistros()}>
+            <HugeiconsIcon icon={Refresh01Icon} strokeWidth={1.75} />
+            Refresh
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

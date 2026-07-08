@@ -1295,7 +1295,11 @@ function VoiceBlock() {
               variant="outline"
               className="h-8 flex-1 justify-between gap-2 px-2.5 text-[11.5px]"
             >
-              <span>{STT_PROVIDER_LABELS[sttProvider]}</span>
+              <span>
+                {STT_PROVIDER_LABELS[
+                  sttProvider as keyof typeof STT_PROVIDER_LABELS
+                ] ?? sttProvider}
+              </span>
               <HugeiconsIcon
                 icon={ArrowDown01Icon}
                 size={11}

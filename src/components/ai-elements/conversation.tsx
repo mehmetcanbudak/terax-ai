@@ -1,13 +1,14 @@
 "use client";
 
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import type { UIMessage } from "ai";
-import { ArrowDown01Icon, Download01Icon } from "@hugeicons/core-free-icons";
+import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
+import Download01Icon from "@hugeicons/core-free-icons/Download01Icon";
 import { HugeiconsIcon } from "@hugeicons/react";
+import type { UIMessage } from "ai";
 import type { ComponentProps } from "react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export type ConversationProps = ComponentProps<typeof StickToBottom>;
 
@@ -52,14 +53,14 @@ export const ConversationEmptyState = ({
   <div
     className={cn(
       "flex size-full flex-col items-center justify-center gap-3 p-8 text-center",
-      className
+      className,
     )}
     {...props}
   >
     {children ?? (
       <>
         {icon && <div className="text-muted-foreground">{icon}</div>}
-        <div className="space-y-1">
+        <div className="flex flex-col gap-1">
           <h3 className="font-medium text-sm">{title}</h3>
           {description && (
             <p className="text-muted-foreground text-sm">{description}</p>
@@ -87,7 +88,7 @@ export const ConversationScrollButton = ({
       <Button
         className={cn(
           "absolute bottom-3 left-1/2 size-7 -translate-x-1/2 rounded-full border-border/50 bg-background/90 shadow-md backdrop-blur dark:bg-background/80 dark:hover:bg-muted",
-          className
+          className,
         )}
         onClick={handleScrollToBottom}
         size="icon"
@@ -95,7 +96,11 @@ export const ConversationScrollButton = ({
         variant="outline"
         {...props}
       >
-        <HugeiconsIcon icon={ArrowDown01Icon} size={13} strokeWidth={2} />
+        <HugeiconsIcon
+          data-icon="inline-start"
+          icon={ArrowDown01Icon}
+          strokeWidth={2}
+        />
       </Button>
     )
   );
@@ -126,8 +131,8 @@ export const messagesToMarkdown = (
   messages: UIMessage[],
   formatMessage: (
     message: UIMessage,
-    index: number
-  ) => string = defaultFormatMessage
+    index: number,
+  ) => string = defaultFormatMessage,
 ): string => messages.map((msg, i) => formatMessage(msg, i)).join("\n\n");
 
 export const ConversationDownload = ({
@@ -155,7 +160,7 @@ export const ConversationDownload = ({
     <Button
       className={cn(
         "absolute top-4 right-4 rounded-full dark:bg-background dark:hover:bg-muted",
-        className
+        className,
       )}
       onClick={handleDownload}
       size="icon"
@@ -163,7 +168,9 @@ export const ConversationDownload = ({
       variant="outline"
       {...props}
     >
-      {children ?? <HugeiconsIcon icon={Download01Icon} size={16} />}
+      {children ?? (
+        <HugeiconsIcon data-icon="inline-start" icon={Download01Icon} />
+      )}
     </Button>
   );
 };

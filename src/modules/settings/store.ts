@@ -19,6 +19,10 @@ import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { LazyStore } from "@tauri-apps/plugin-store";
 
 export type ThemePref = "system" | "light" | "dark";
+export type PiAuthMode = "terax" | "profile";
+export type PiSkillsMode = "off" | "project" | "selected";
+export type TtsProviderId = "cartesia" | "avspeech";
+export type SttProviderId = SttProvider | "whisper" | "deepgram";
 
 export const DEFAULT_THEME_ID = "terax-default";
 
@@ -119,6 +123,8 @@ export type Preferences = {
   backgroundOpacity: number;
   backgroundBlur: number;
   defaultModelId: ModelId;
+  piAuthMode: PiAuthMode;
+  piModelId: string;
   editorTheme: EditorThemePref;
   customInstructions: string;
   autostart: boolean;
@@ -137,9 +143,13 @@ export type Preferences = {
   openaiCompatibleContextLimit: number;
   customEndpoints: CustomEndpoint[];
   openrouterModelId: string;
-  sttProvider: SttProvider;
+  ttsProvider: TtsProviderId;
+  sttProvider: SttProviderId;
   groqSttModel: string;
   whispercppBaseURL: string;
+  wakeWordEnabled: boolean;
+  pushToTalkShortcut: string;
+  overlayEnabled: boolean;
   favoriteModelIds: string[];
   recentModelIds: string[];
   vimMode: boolean;
@@ -189,6 +199,8 @@ const KEY_BG_IMAGE_ID = "backgroundImageId";
 const KEY_BG_OPACITY = "backgroundOpacity";
 const KEY_BG_BLUR = "backgroundBlur";
 const KEY_DEFAULT_MODEL = "defaultModelId";
+const KEY_PI_AUTH_MODE = "piAuthMode";
+const KEY_PI_MODEL = "piModelId";
 const KEY_EDITOR_THEME = "editorTheme";
 const KEY_CUSTOM_INSTRUCTIONS = "customInstructions";
 const KEY_AUTOSTART = "autostart";
@@ -207,9 +219,13 @@ const KEY_OPENAI_COMPAT_MODEL_ID = "openaiCompatibleModelId";
 const KEY_OPENAI_COMPAT_CONTEXT_LIMIT = "openaiCompatibleContextLimit";
 const KEY_CUSTOM_ENDPOINTS = "customEndpoints";
 const KEY_OPENROUTER_MODEL_ID = "openrouterModelId";
+const KEY_TTS_PROVIDER = "ttsProvider";
 const KEY_STT_PROVIDER = "sttProvider";
 const KEY_GROQ_STT_MODEL = "groqSttModel";
 const KEY_WHISPERCPP_BASE_URL = "whispercppBaseURL";
+const KEY_WAKE_WORD_ENABLED = "wakeWordEnabled";
+const KEY_PTT_SHORTCUT = "pushToTalkShortcut";
+const KEY_OVERLAY_ENABLED = "overlayEnabled";
 const KEY_FAVORITE_MODELS = "favoriteModelIds";
 const KEY_RECENT_MODELS = "recentModelIds";
 const KEY_VIM_MODE = "vimMode";
@@ -260,6 +276,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   backgroundOpacity: 0.5,
   backgroundBlur: 0,
   defaultModelId: DEFAULT_MODEL_ID,
+  piAuthMode: "terax",
+  piModelId: DEFAULT_MODEL_ID,
   editorTheme: EDITOR_THEME_AUTO,
   customInstructions: "",
   autostart: false,
@@ -278,9 +296,13 @@ export const DEFAULT_PREFERENCES: Preferences = {
   openaiCompatibleContextLimit: 128_000,
   customEndpoints: [],
   openrouterModelId: "",
+  ttsProvider: "cartesia",
   sttProvider: DEFAULT_STT_PROVIDER,
   groqSttModel: "whisper-large-v3-turbo",
   whispercppBaseURL: WHISPERCPP_DEFAULT_BASE_URL,
+  wakeWordEnabled: false,
+  pushToTalkShortcut: "Alt+Space",
+  overlayEnabled: true,
   favoriteModelIds: [],
   recentModelIds: [],
   vimMode: false,
@@ -348,6 +370,9 @@ export async function loadPreferences(): Promise<Preferences> {
         ? stored
         : DEFAULT_PREFERENCES.defaultModelId;
     })(),
+    piAuthMode:
+      get<PiAuthMode>(KEY_PI_AUTH_MODE) ?? DEFAULT_PREFERENCES.piAuthMode,
+    piModelId: get<string>(KEY_PI_MODEL) ?? DEFAULT_PREFERENCES.piModelId,
     editorTheme: ((): EditorThemePref => {
       const stored = get<string>(KEY_EDITOR_THEME);
       if (stored === EDITOR_THEME_AUTO || isEditorThemeId(stored))
@@ -402,13 +427,22 @@ export async function loadPreferences(): Promise<Preferences> {
     openrouterModelId:
       get<string>(KEY_OPENROUTER_MODEL_ID) ??
       DEFAULT_PREFERENCES.openrouterModelId,
+    ttsProvider:
+      get<TtsProviderId>(KEY_TTS_PROVIDER) ?? DEFAULT_PREFERENCES.ttsProvider,
     sttProvider:
-      get<SttProvider>(KEY_STT_PROVIDER) ?? DEFAULT_PREFERENCES.sttProvider,
+      get<SttProviderId>(KEY_STT_PROVIDER) ?? DEFAULT_PREFERENCES.sttProvider,
     groqSttModel:
       get<string>(KEY_GROQ_STT_MODEL) ?? DEFAULT_PREFERENCES.groqSttModel,
     whispercppBaseURL:
       get<string>(KEY_WHISPERCPP_BASE_URL) ??
       DEFAULT_PREFERENCES.whispercppBaseURL,
+    wakeWordEnabled:
+      get<boolean>(KEY_WAKE_WORD_ENABLED) ??
+      DEFAULT_PREFERENCES.wakeWordEnabled,
+    pushToTalkShortcut:
+      get<string>(KEY_PTT_SHORTCUT) ?? DEFAULT_PREFERENCES.pushToTalkShortcut,
+    overlayEnabled:
+      get<boolean>(KEY_OVERLAY_ENABLED) ?? DEFAULT_PREFERENCES.overlayEnabled,
     favoriteModelIds: (
       get<string[]>(KEY_FAVORITE_MODELS) ?? DEFAULT_PREFERENCES.favoriteModelIds
     ).filter(isKnownModelId),
@@ -547,6 +581,14 @@ export async function setDefaultModel(value: ModelId): Promise<void> {
   await writePref(KEY_DEFAULT_MODEL, value);
 }
 
+export async function setPiAuthMode(value: PiAuthMode): Promise<void> {
+  await writePref(KEY_PI_AUTH_MODE, value);
+}
+
+export async function setPiModelId(value: string): Promise<void> {
+  await writePref(KEY_PI_MODEL, value);
+}
+
 export async function setEditorTheme(value: EditorThemePref): Promise<void> {
   await writePref(KEY_EDITOR_THEME, value);
 }
@@ -628,7 +670,11 @@ export async function setOpenrouterModelId(value: string): Promise<void> {
   await writePref(KEY_OPENROUTER_MODEL_ID, value);
 }
 
-export async function setSttProvider(value: SttProvider): Promise<void> {
+export async function setTtsProvider(value: TtsProviderId): Promise<void> {
+  await writePref(KEY_TTS_PROVIDER, value);
+}
+
+export async function setSttProvider(value: SttProviderId): Promise<void> {
   await writePref(KEY_STT_PROVIDER, value);
 }
 
@@ -638,6 +684,18 @@ export async function setGroqSttModel(value: string): Promise<void> {
 
 export async function setWhispercppBaseURL(value: string): Promise<void> {
   await writePref(KEY_WHISPERCPP_BASE_URL, value.trim());
+}
+
+export async function setWakeWordEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_WAKE_WORD_ENABLED, value);
+}
+
+export async function setPushToTalkShortcut(value: string): Promise<void> {
+  await writePref(KEY_PTT_SHORTCUT, value);
+}
+
+export async function setOverlayEnabled(value: boolean): Promise<void> {
+  await writePref(KEY_OVERLAY_ENABLED, value);
 }
 
 export async function setFavoriteModelIds(value: string[]): Promise<void> {
@@ -789,6 +847,8 @@ export async function onPreferencesChange(
     [KEY_BG_OPACITY]: "backgroundOpacity",
     [KEY_BG_BLUR]: "backgroundBlur",
     [KEY_DEFAULT_MODEL]: "defaultModelId",
+    [KEY_PI_AUTH_MODE]: "piAuthMode",
+    [KEY_PI_MODEL]: "piModelId",
     [KEY_EDITOR_THEME]: "editorTheme",
     [KEY_CUSTOM_INSTRUCTIONS]: "customInstructions",
     [KEY_AUTOSTART]: "autostart",
@@ -807,9 +867,13 @@ export async function onPreferencesChange(
     [KEY_OPENAI_COMPAT_CONTEXT_LIMIT]: "openaiCompatibleContextLimit",
     [KEY_CUSTOM_ENDPOINTS]: "customEndpoints",
     [KEY_OPENROUTER_MODEL_ID]: "openrouterModelId",
+    [KEY_TTS_PROVIDER]: "ttsProvider",
     [KEY_STT_PROVIDER]: "sttProvider",
     [KEY_GROQ_STT_MODEL]: "groqSttModel",
     [KEY_WHISPERCPP_BASE_URL]: "whispercppBaseURL",
+    [KEY_WAKE_WORD_ENABLED]: "wakeWordEnabled",
+    [KEY_PTT_SHORTCUT]: "pushToTalkShortcut",
+    [KEY_OVERLAY_ENABLED]: "overlayEnabled",
     [KEY_FAVORITE_MODELS]: "favoriteModelIds",
     [KEY_RECENT_MODELS]: "recentModelIds",
     [KEY_VIM_MODE]: "vimMode",

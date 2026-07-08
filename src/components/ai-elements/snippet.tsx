@@ -1,5 +1,18 @@
 "use client";
 
+import CheckmarkCircle01Icon from "@hugeicons/core-free-icons/CheckmarkCircle01Icon";
+import CopyIcon from "@hugeicons/core-free-icons/CopyIcon";
+import { HugeiconsIcon } from "@hugeicons/react";
+import type { ComponentProps } from "react";
+import {
+  createContext,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   InputGroup,
   InputGroupAddon,
@@ -8,18 +21,6 @@ import {
   InputGroupText,
 } from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
-import { CheckmarkCircle01Icon, CopyIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-import type { ComponentProps } from "react";
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
 
 interface SnippetContextType {
   code: string;
@@ -71,7 +72,7 @@ export type SnippetInputProps = Omit<
 >;
 
 export const SnippetInput = ({ className, ...props }: SnippetInputProps) => {
-  const { code } = useContext(SnippetContext);
+  const { code } = use(SnippetContext);
 
   return (
     <InputGroupInput
@@ -99,7 +100,7 @@ export const SnippetCopyButton = ({
 }: SnippetCopyButtonProps) => {
   const [isCopied, setIsCopied] = useState(false);
   const timeoutRef = useRef<number>(0);
-  const { code } = useContext(SnippetContext);
+  const { code } = use(SnippetContext);
 
   const copyToClipboard = useCallback(async () => {
     if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
@@ -114,7 +115,7 @@ export const SnippetCopyButton = ({
         onCopy?.();
         timeoutRef.current = window.setTimeout(
           () => setIsCopied(false),
-          timeout
+          timeout,
         );
       }
     } catch (error) {
@@ -126,7 +127,7 @@ export const SnippetCopyButton = ({
     () => () => {
       window.clearTimeout(timeoutRef.current);
     },
-    []
+    [],
   );
 
   const Icon = isCopied ? CheckmarkCircle01Icon : CopyIcon;

@@ -1,13 +1,14 @@
 import {
   convertToModelMessages,
+  type LanguageModel,
+  type ModelMessage,
   pruneMessages,
   stepCountIs,
   streamText,
-  type LanguageModel,
-  type ModelMessage,
   type UIMessage,
 } from "ai";
 import {
+  type CustomEndpoint,
   DEFAULT_MODEL_ID,
   endpointIdFromCompatModel,
   getModelContextLimit,
@@ -17,15 +18,15 @@ import {
   MLX_DEFAULT_BASE_URL,
   modelKeepsReasoning,
   OLLAMA_DEFAULT_BASE_URL,
+  type ProviderId,
   providerNeedsKey,
   resolveModel,
   selectSystemPrompt,
-  type CustomEndpoint,
-  type ProviderId,
 } from "../config";
 import { buildTools, type ToolContext } from "../tools/tools";
 import { compactModelMessagesDetailed } from "./compact";
-import type { ProviderKeys, CustomEndpointKeys } from "./keyring";
+import type { CustomEndpointKeys, ProviderKeys } from "./keyring";
+import { isE2eMockEnabled, isMockModelId } from "./mockFlags";
 import { createProxyFetch } from "./proxyFetch";
 
 const localProxyFetch = createProxyFetch({ allowPrivateNetwork: true });
@@ -123,8 +124,9 @@ export async function buildLanguageModel(
       break;
     }
     case "deepseek": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "deepseek",
         baseURL: "https://api.deepseek.com",
@@ -133,8 +135,9 @@ export async function buildLanguageModel(
       break;
     }
     case "mistral": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "mistral",
         baseURL: "https://api.mistral.ai/v1",
@@ -148,8 +151,9 @@ export async function buildLanguageModel(
       break;
     }
     case "openrouter": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "openrouter",
         baseURL: "https://openrouter.ai/api/v1",
@@ -167,8 +171,9 @@ export async function buildLanguageModel(
           "OpenAI-compatible provider has no base URL. Set it in Settings → Models.",
         );
       }
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "openai-compatible",
         baseURL: compatURL,
@@ -178,8 +183,9 @@ export async function buildLanguageModel(
       break;
     }
     case "lmstudio": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "lmstudio",
         baseURL: lmstudioURL,
@@ -188,8 +194,9 @@ export async function buildLanguageModel(
       break;
     }
     case "mlx": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "mlx",
         baseURL: mlxURL,
@@ -198,8 +205,9 @@ export async function buildLanguageModel(
       break;
     }
     case "ollama": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "ollama",
         baseURL: ollamaURL,
@@ -235,14 +243,18 @@ export function buildConfiguredLanguageModel(
   keys: ProviderKeys,
   local: LocalProviderConfig = {},
 ): Promise<LanguageModel> {
+  // E2E mock short-circuit (Phase C, Stage 0): only when the flag is set, and
+  // resolved before any key check or provider switch. Dynamically imported so
+  // the mock + `ai/test` never enter the production main chunk.
+  if (isMockModelId(modelId) && isE2eMockEnabled()) {
+    return import("./mockProvider").then((m) => m.buildMockModel(modelId));
+  }
   if (isCompatModelId(modelId)) {
     const eid = endpointIdFromCompatModel(modelId);
     const ep = local.customEndpoints?.find((e) => e.id === eid);
     if (!ep) throw new Error(`Custom endpoint not found: ${eid}`);
     if (!ep.modelId.trim()) {
-      throw new Error(
-        `${ep.name}: no model id set. Open Settings → Models.`,
-      );
+      throw new Error(`${ep.name}: no model id set. Open Settings → Models.`);
     }
     return buildLanguageModel(
       "openai-compatible",
@@ -414,7 +426,14 @@ export async function runAgentStream(opts: RunAgentOptions) {
     opts.projectMemory ?? null,
   );
 
-  const history = await convertToModelMessages(opts.uiMessages);
+  const { compactIfNeeded } = await import("./agentArchive");
+  const archived = compactIfNeeded(opts.uiMessages);
+  const effectiveMessages = archived.active;
+  const archivePrefix = archived.archive
+    ? `\n\n<conversation-archive>\n${archived.archive}\n</conversation-archive>`
+    : "";
+
+  const history = await convertToModelMessages(effectiveMessages);
   const keepsReasoning = modelKeepsReasoning(info);
   const prunedHistory = pruneMessages({
     messages: history,
@@ -434,7 +453,9 @@ export async function runAgentStream(opts: RunAgentOptions) {
     opts.onCompact?.({ droppedCount: compact.droppedCount });
   }
 
-  const messages: ModelMessage[] = [{ role: "system", content: stableSystem }];
+  const messages: ModelMessage[] = [
+    { role: "system", content: stableSystem + archivePrefix },
+  ];
   if (opts.planMode) {
     messages.push({ role: "system", content: PLAN_MODE_PROMPT });
   }

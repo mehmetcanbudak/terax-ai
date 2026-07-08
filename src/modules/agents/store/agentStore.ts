@@ -1,9 +1,11 @@
 import { create } from "zustand";
 import type {
   AgentNotification,
+  AgentNotificationCategory,
   AgentSession,
   AgentStatus,
   LocalAgentState,
+  PiAgentSessionState,
 } from "../lib/types";
 
 const MAX_NOTIFICATIONS = 50;
@@ -13,21 +15,28 @@ let notifSeq = 0;
 type AgentStoreState = {
   sessions: Record<number, AgentSession>;
   localAgent: LocalAgentState;
+  piSessions: Record<string, PiAgentSessionState>;
   notifications: AgentNotification[];
   start: (leafId: number, tabId: number, agent: string) => void;
   setStatus: (leafId: number, status: AgentStatus) => void;
   finish: (leafId: number) => void;
   setLocalAgent: (state: LocalAgentState) => void;
-  pushNotification: (
-    n: Omit<AgentNotification, "id" | "at" | "read">,
-  ) => void;
+  setPiSession: (state: PiAgentSessionState) => void;
+  removePiSession: (sessionId: string) => void;
+  pushNotification: (n: Omit<AgentNotification, "id" | "at" | "read">) => void;
   markAllRead: () => void;
+  markNotificationsRead: (ids: readonly string[]) => void;
+  markPiNotificationsRead: (category: AgentNotificationCategory) => void;
+  markSourceRead: (source: AgentNotification["source"]) => void;
+  removeNotification: (id: string) => void;
+  clearReadNotifications: () => void;
   clearNotifications: () => void;
 };
 
 export const useAgentStore = create<AgentStoreState>((set) => ({
   sessions: {},
   localAgent: null,
+  piSessions: {},
   notifications: [],
 
   start: (leafId, tabId, agent) =>
@@ -82,7 +91,47 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
       if (a && state && a.status === state.status && a.agent === state.agent) {
         return s;
       }
-      return { localAgent: state };
+      if (!state) return { localAgent: null };
+
+      const now = Date.now();
+      return {
+        localAgent: {
+          ...state,
+          attentionSince:
+            state.attentionSince ?? (state.status === "waiting" ? now : null),
+          lastActivityAt: state.lastActivityAt ?? now,
+          startedAt: state.startedAt ?? a?.startedAt ?? now,
+        },
+      };
+    }),
+
+  setPiSession: (state) =>
+    set((s) => {
+      const prev = s.piSessions[state.sessionId];
+      if (
+        prev &&
+        prev.status === state.status &&
+        prev.title === state.title &&
+        prev.body === state.body &&
+        prev.cwd === state.cwd &&
+        prev.lastActivityAt === state.lastActivityAt
+      ) {
+        return s;
+      }
+      return {
+        piSessions: {
+          ...s.piSessions,
+          [state.sessionId]: state,
+        },
+      };
+    }),
+
+  removePiSession: (sessionId) =>
+    set((s) => {
+      if (!s.piSessions[sessionId]) return s;
+      const next = { ...s.piSessions };
+      delete next[sessionId];
+      return { piSessions: next };
     }),
 
   pushNotification: (n) =>
@@ -96,15 +145,84 @@ export const useAgentStore = create<AgentStoreState>((set) => ({
   markAllRead: () =>
     set((s) => {
       if (!s.notifications.some((n) => !n.read)) return s;
-      return { notifications: s.notifications.map((n) => ({ ...n, read: true })) };
+      return {
+        notifications: s.notifications.map((n) => ({ ...n, read: true })),
+      };
     }),
 
-  clearNotifications: () => set({ notifications: [] }),
+  markNotificationsRead: (ids) =>
+    set((s) => {
+      const unreadIds = new Set(ids);
+      if (
+        unreadIds.size === 0 ||
+        !s.notifications.some((n) => unreadIds.has(n.id) && !n.read)
+      ) {
+        return s;
+      }
+      return {
+        notifications: s.notifications.map((n) =>
+          unreadIds.has(n.id) ? { ...n, read: true } : n,
+        ),
+      };
+    }),
+
+  markPiNotificationsRead: (category) =>
+    set((s) => {
+      if (
+        !s.notifications.some(
+          (n) => n.source === "pi" && n.category === category && !n.read,
+        )
+      ) {
+        return s;
+      }
+      return {
+        notifications: s.notifications.map((n) =>
+          n.source === "pi" && n.category === category
+            ? { ...n, read: true }
+            : n,
+        ),
+      };
+    }),
+
+  markSourceRead: (source) =>
+    set((s) => {
+      if (!s.notifications.some((n) => n.source === source && !n.read))
+        return s;
+      return {
+        notifications: s.notifications.map((n) =>
+          n.source === source ? { ...n, read: true } : n,
+        ),
+      };
+    }),
+
+  removeNotification: (id) =>
+    set((s) => {
+      const notifications = s.notifications.filter(
+        (notification) => notification.id !== id,
+      );
+      return notifications.length === s.notifications.length
+        ? s
+        : { notifications };
+    }),
+
+  clearReadNotifications: () =>
+    set((s) => {
+      const notifications = s.notifications.filter((n) => !n.read);
+      return notifications.length === s.notifications.length
+        ? s
+        : { notifications };
+    }),
+
+  clearNotifications: () =>
+    set((s) => (s.notifications.length === 0 ? s : { notifications: [] })),
 }));
 
 /** The tab/leaf of the agent that most recently entered the waiting state, for
  *  the keyboard jump-to-attention shortcut. Null when none is waiting. */
-export function nextAttentionTarget(): { tabId: number; leafId: number } | null {
+export function nextAttentionTarget(): {
+  tabId: number;
+  leafId: number;
+} | null {
   const waiting = Object.values(useAgentStore.getState().sessions)
     .filter((s) => s.status === "waiting")
     .sort((a, b) => (b.attentionSince ?? 0) - (a.attentionSince ?? 0));

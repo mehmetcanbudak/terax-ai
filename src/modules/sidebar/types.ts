@@ -1,1 +1,6 @@
-export type SidebarViewId = "explorer" | "source-control";
+export type {
+  PrimarySidebarViewId,
+  SecondarySidebarViewId,
+  SidebarViewId,
+  SidebarViewItem,
+} from "./views";

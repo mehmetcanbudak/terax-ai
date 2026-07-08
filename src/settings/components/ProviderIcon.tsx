@@ -33,15 +33,19 @@ const ICON_BY_PROVIDER = {
 } as const satisfies Record<ProviderId, typeof ChatGptIcon>;
 
 type Props = {
-  provider: ProviderId;
+  provider: ProviderId | string;
   size?: number;
   className?: string;
 };
 
+function iconForProvider(provider: ProviderId | string) {
+  return ICON_BY_PROVIDER[provider as ProviderId] ?? PlugIcon;
+}
+
 export function ProviderIcon({ provider, size = 14, className }: Props) {
   return (
     <HugeiconsIcon
-      icon={ICON_BY_PROVIDER[provider]}
+      icon={iconForProvider(provider)}
       size={size}
       strokeWidth={1.75}
       className={className}

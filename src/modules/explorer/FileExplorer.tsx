@@ -85,7 +85,13 @@ type Row =
       gitStatusCode: GitStatusCode | null;
     }
   | { kind: "pending"; key: string; depth: number; pendingKind: "file" | "dir" }
-  | { kind: "status"; key: string; depth: number; tone: "muted" | "error"; message: string };
+  | {
+      kind: "status";
+      key: string;
+      depth: number;
+      tone: "muted" | "error";
+      message: string;
+    };
 
 const ROW_HEIGHT = 24;
 const OVERSCAN = 8;
@@ -209,7 +215,11 @@ export const FileExplorer = memo(
     const scrollRef = useRef<HTMLDivElement>(null);
 
     const { rows, entryIndexByPath } = useMemo(() => {
-      if (!rootPath) return { rows: [] as Row[], entryIndexByPath: new Map<string, number>() };
+      if (!rootPath)
+        return {
+          rows: [] as Row[],
+          entryIndexByPath: new Map<string, number>(),
+        };
       return buildRows(rootPath, tree, lookupGitStatus);
       // `tree` is intentionally omitted: its identity changes every render, but
       // the listed fields are the only inputs buildRows actually reads.
@@ -273,7 +283,8 @@ export const FileExplorer = memo(
     });
 
     const dropTargetDir = dnd.dropTargetDir ?? fileDrop.externalTargetDir;
-    const rootIsDropTarget = dropTargetDir != null && dropTargetDir === rootPath;
+    const rootIsDropTarget =
+      dropTargetDir != null && dropTargetDir === rootPath;
     useEffect(() => {
       if (!dropTargetDir || dropTargetDir === rootPath) return;
       if (tree.expanded.has(dropTargetDir)) return;
@@ -306,7 +317,10 @@ export const FileExplorer = memo(
 
     const lastSyncedActivePathRef = useRef<string | null>(null);
     useEffect(() => {
-      if (!activeFilePath || activeFilePath === lastSyncedActivePathRef.current) {
+      if (
+        !activeFilePath ||
+        activeFilePath === lastSyncedActivePathRef.current
+      ) {
         return;
       }
       if (!entryIndexByPath.has(activeFilePath)) return;
@@ -353,7 +367,7 @@ export const FileExplorer = memo(
 
     if (!rootPath) {
       return (
-        <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden items-center justify-center gap-2 p-6 text-center">
           <HugeiconsIcon
             icon={Folder01Icon}
             size={24}
@@ -478,7 +492,11 @@ export const FileExplorer = memo(
           );
         case "status":
           return (
-            <StatusRow depth={row.depth} message={row.message} tone={row.tone} />
+            <StatusRow
+              depth={row.depth}
+              message={row.message}
+              tone={row.tone}
+            />
           );
       }
     };
@@ -486,7 +504,7 @@ export const FileExplorer = memo(
     return (
       <div
         ref={containerRef}
-        className="flex h-full flex-col outline-none"
+        className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden outline-none"
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >
@@ -522,6 +540,7 @@ export const FileExplorer = memo(
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => tree.beginCreate(rootPath, "file")}
             title="New file"
+            aria-label="New file"
           >
             <HugeiconsIcon icon={FileAddIcon} size={13} strokeWidth={2} />
           </Button>
@@ -531,6 +550,7 @@ export const FileExplorer = memo(
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => tree.beginCreate(rootPath, "dir")}
             title="New folder"
+            aria-label="New folder"
           >
             <HugeiconsIcon icon={FolderAddIcon} size={13} strokeWidth={2} />
           </Button>
@@ -540,6 +560,7 @@ export const FileExplorer = memo(
             className="size-6 text-muted-foreground hover:text-foreground"
             onClick={() => tree.refresh(rootPath)}
             title="Refresh"
+            aria-label="Refresh"
           >
             <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
           </Button>
@@ -725,7 +746,9 @@ export const FileExplorer = memo(
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() =>
-                      void copyToClipboard(relativePath(rootPath, menuTarget.path))
+                      void copyToClipboard(
+                        relativePath(rootPath, menuTarget.path),
+                      )
                     }
                   >
                     Copy Relative Path

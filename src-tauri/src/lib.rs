@@ -1,7 +1,31 @@
+//! Terax — an open-source AI-native terminal emulator.
+//!
+//! This crate contains the Tauri 2 Rust backend: PTY management, filesystem
+//! operations, git integration, Pi AI session lifecycle, MCP tool bridge,
+//! and the workspace authorization layer.
+
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::undocumented_unsafe_blocks,
+        clippy::unwrap_used
+    )
+)]
+
 pub mod modules;
 
-use modules::{agent, fs, git, history, lsp, net, pty, secrets, shell, workspace};
-use std::sync::Mutex;
+#[cfg(all(target_os = "macos", feature = "openclicky"))]
+use modules::tray;
+use modules::{
+    agent, artifacts, browser, capture, fs, git, history, lsp, mcp, model_compare, net, overlay,
+    pi, pty, secrets, shell, skills, workspace,
+};
+#[cfg(feature = "openclicky")]
+use modules::{agents, voice};
+#[cfg(feature = "workflow")]
+use modules::{schedule, webhook};
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::{PhysicalPosition, WindowEvent};
@@ -13,7 +37,13 @@ struct LaunchDir(Mutex<Option<String>>);
 
 #[tauri::command]
 fn get_launch_dir(state: State<'_, LaunchDir>) -> Option<String> {
-    state.0.lock().expect("LaunchDir mutex poisoned").take()
+    match state.0.lock() {
+        Ok(mut launch_dir) => launch_dir.take(),
+        Err(error) => {
+            log::error!("launch dir lock failed: {error}");
+            None
+        }
+    }
 }
 
 fn parse_launch_dir() -> Option<String> {
@@ -44,7 +74,7 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         let _ = window.show();
         let _ = window.set_focus();
         if let Some(t) = tab.as_deref().filter(|s| !s.is_empty()) {
-            // emit() serializes via JSON — no string-escape footgun, unlike
+            // emit() serializes via JSON - no string-escape footgun, unlike
             // eval() with format!(). Frontend listens via Tauri event API.
             let _ = window.emit("terax:settings-tab", t);
         }
@@ -62,7 +92,7 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
         .always_on_top(true);
 
     // Tie lifecycle to the main window so settings minimizes/closes with it.
-    // macOS: skip parent() — child + always_on_top leaves the settings webview
+    // macOS: skip parent() - child + always_on_top leaves the settings webview
     // behind the main window except while the parent is being dragged (#33).
     #[cfg(not(target_os = "macos"))]
     let builder = if let Some(main) = app.get_webview_window("main") {
@@ -74,6 +104,7 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     #[cfg(target_os = "macos")]
     let builder = builder
         .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .traffic_light_position(tauri::LogicalPosition::new(14.0, 24.0))
         .hidden_title(true);
 
     // On Linux/Windows we render our own titlebar, so drop native chrome
@@ -84,7 +115,7 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
     let window = builder.build().map_err(|e| e.to_string())?;
 
     // Some Linux compositors (GNOME/Mutter with CSD-by-default) ignore the
-    // builder-time decorations flag — re-assert it after realize.
+    // builder-time decorations flag - re-assert it after realize.
     #[cfg(target_os = "linux")]
     {
         let _ = window.set_decorations(false);
@@ -112,33 +143,24 @@ async fn open_settings_window(app: tauri::AppHandle, tab: Option<String>) -> Res
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(windows)]
-    {
-        let args: Vec<String> = std::env::args().collect();
-        if args.get(1).map(String::as_str) == Some("__terax_notify") {
-            if let (Some(agent), Some(event)) = (args.get(2), args.get(3)) {
-                agent::emit_conout_marker(agent, event);
-            }
-            use std::io::Write;
-            let mut out = std::io::stdout();
-            let _ = out.write_all(b"{}");
-            let _ = out.flush();
-            std::process::exit(0);
-        }
+    #[cfg(feature = "openclicky")]
+    let args: Vec<String> = std::env::args().collect();
+    #[cfg(feature = "openclicky")]
+    if args.iter().any(|a| a == "--mcp-server") {
+        mcp::cli::run_stdio_server();
+        return;
     }
+
+    #[cfg(all(target_os = "macos", feature = "openclicky"))]
+    tray::set_activation_policy_accessory();
 
     let cli_dir = parse_launch_dir();
     workspace::init_launch_cwd(cli_dir.as_deref());
 
-    let builder = tauri::Builder::default();
-    #[cfg(target_os = "linux")]
-    let builder = builder.plugin(tauri_plugin_clipboard_manager::init());
-    builder
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // Skip restoring VISIBLE — frontend calls window.show() after first
-        // paint so the user never sees a transparent window-shadow flash on
-        // Windows/Linux.
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(StateFlags::all() & !StateFlags::VISIBLE)
@@ -148,15 +170,79 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(tauri_plugin_log::log::LevelFilter::Info)
                 .build(),
         )
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+
+    #[cfg(target_os = "linux")]
+    {
+        builder = builder.plugin(tauri_plugin_clipboard_manager::init());
+    }
+
+    #[cfg(feature = "openclicky")]
+    {
+        builder = builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, event, event_state| {
+                    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+                    let shortcut_def = Shortcut::new(Some(Modifiers::ALT), Code::Space);
+                    if event == &shortcut_def {
+                        match event_state.state {
+                            ShortcutState::Pressed => {
+                                let _ = app.emit("voice-ptt-start", ());
+                            }
+                            ShortcutState::Released => {
+                                let _ = app.emit("voice-ptt-stop", ());
+                            }
+                        }
+                    }
+                })
+                .build(),
+        );
+    }
+
+    #[cfg(feature = "workflow")]
+    {
+        builder = builder
+            .manage(schedule::ScheduleState::default())
+            .manage(webhook::WebhookState::default());
+    }
+
+    #[cfg(feature = "openclicky")]
+    {
+        builder = builder
+            .manage(voice::VoiceState::default())
+            .manage(voice::ptt::PttState::new())
+            .manage(agents::lease::FileLeaseCoordinator::new());
+    }
+
+    if let Err(error) = builder
         .setup(|_app| {
-            // macOS skips parent() for the settings window, so tie its lifecycle
-            // to the main window here instead. Other platforms keep parent().
+            if std::env::var_os("TERAX_E2E").is_some() {
+                if let Some(main) = _app.get_webview_window("main") {
+                    if let Err(error) = main.show() {
+                        log::warn!("e2e main window show failed: {error}");
+                    }
+                }
+            }
+
+            #[cfg(all(target_os = "macos", feature = "openclicky"))]
+            if let Err(e) = tray::setup_tray(_app.handle()) {
+                log::warn!("tray setup failed (non-fatal, continuing with dock icon): {e}");
+            }
+
+            #[cfg(feature = "workflow")]
+            {
+                let handle = _app.handle().clone();
+                tokio::spawn(async move {
+                    schedule::auto_start_if_needed(&handle).await;
+                });
+            }
+
             #[cfg(target_os = "macos")]
             if let Some(main) = _app.get_webview_window("main") {
                 let handle = _app.handle().clone();
@@ -166,7 +252,18 @@ pub fn run() {
                         WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed
                     ) {
                         if let Some(settings) = handle.get_webview_window("settings") {
-                            let _ = settings.close();
+                            let _ = settings.hide();
+                            let h = handle.clone();
+                            // Tauri's window-event handler runs on the main event
+                            // loop with no ambient Tokio reactor, so `tokio::spawn`
+                            // would panic ("no reactor running") and abort the app.
+                            // Use Tauri's managed runtime, which is thread-agnostic.
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                                if let Some(s) = h.get_webview_window("settings") {
+                                    let _ = s.close();
+                                }
+                            });
                         }
                     }
                 });
@@ -174,7 +271,14 @@ pub fn run() {
             Ok(())
         })
         .manage(pty::PtyState::default())
+        .manage(pi::PiState::default())
+        .manage(pi::PiAgentToolState::default())
+        .manage(Arc::new(mcp::McpState::default()))
+        .manage(artifacts::ArtifactsState::default())
+        .manage(browser::BrowserState::default())
         .manage(shell::ShellState::default())
+        .manage(modules::capabilities::WorkflowCapabilityState::default())
+        .manage(modules::capabilities::AppCapabilityState::default())
         .manage(secrets::SecretsState::default())
         .manage(fs::watch::FsWatchState::default())
         .manage(history::HistoryState::default())
@@ -189,6 +293,9 @@ pub fn run() {
             registry
         })
         .manage(LaunchDir(Mutex::new(cli_dir)))
+        .manage(overlay::OverlayState::default())
+        .manage(capture::CaptureState::default())
+        .manage(skills::SkillsState::default())
         .invoke_handler(tauri::generate_handler![
             pty::pty_open,
             pty::pty_write,
@@ -199,17 +306,87 @@ pub fn run() {
             pty::pty_has_foreground_job,
             pty::pty_shell_name,
             pty::pty_list_shells,
+            pi::pi_env_api_key,
+            pi::pi_local_agents_status,
+            pi::pi_models_list,
+            pi::pi_skills_status,
+            pi::pi_status,
+            pi::pi_start,
+            pi::pi_stop,
+            pi::pi_diagnostics,
+            pi::pi_sessions_history,
+            pi::pi_session_archive,
+            pi::pi_session_restore,
+            pi::pi_session_fork,
+            pi::pi_session_rollback,
+            pi::pi_usage_summary,
+            pi::pi_store_record_session,
+            pi::pi_store_record_events,
+            pi::pi_store_record_transcript,
+            pi::pi_store_load_transcript,
+            pi::pi_store_delete_transcript,
+            pi::pi_agent_tool_execute,
+            pi::pi_approval_grant,
+            pi::pi_agent_session_forget,
+            pi::pi_agent_tool_audit,
+            mcp::mcp_server_configs_list,
+            mcp::mcp_server_config_save,
+            mcp::mcp_server_config_remove,
+            mcp::mcp_tool_preferences_list,
+            mcp::mcp_tool_preference_set,
+            mcp::mcp_tool_policy_set,
+            mcp::mcp_env_secret_statuses,
+            mcp::mcp_env_secret_set,
+            mcp::mcp_env_secret_remove,
+            mcp::mcp_oauth_start,
+            mcp::mcp_oauth_wait_for_callback,
+            mcp::mcp_oauth_complete,
+            mcp::mcp_connect_saved_stdio,
+            mcp::mcp_connect_stdio,
+            mcp::mcp_connect_http,
+            mcp::mcp_disconnect,
+            mcp::mcp_tools,
+            mcp::pi_capability_manifest,
+            mcp::mcp_server_statuses,
+            mcp::mcp_call_tool,
+            artifacts::artifacts_list,
+            artifacts::artifacts_list_all,
+            artifacts::artifacts_list_deleted,
+            artifacts::artifacts_get,
+            artifacts::artifacts_compile_react,
+            artifacts::artifacts_create,
+            artifacts::artifacts_update,
+            artifacts::artifacts_rename_title,
+            artifacts::artifacts_edit,
+            artifacts::artifacts_versions,
+            artifacts::artifacts_export,
+            artifacts::artifacts_export_many,
+            artifacts::artifacts_delete,
+            artifacts::artifacts_delete_many,
+            artifacts::artifacts_restore_deleted,
+            artifacts::artifacts_restore_deleted_many,
+            artifacts::artifacts_purge_deleted,
+            artifacts::artifacts_delete_for_conversation,
+            model_compare::model_compare_history_get,
+            model_compare::model_compare_history_put,
+            model_compare::model_compare_history_clear,
             fs::tree::list_subdirs,
             fs::tree::fs_read_dir,
             fs::file::fs_read_file,
+            fs::file::workflow_file_read,
             fs::file::fs_write_file,
+            fs::file::workflow_file_write,
+            fs::file::fs_write_base64_file,
             fs::file::fs_stat,
             fs::file::fs_canonicalize,
             fs::mutate::fs_create_file,
             fs::mutate::fs_create_dir,
+            fs::mutate::fs_copy_file,
+            fs::mutate::fs_copy,
+            fs::mutate::fs_open_file,
             fs::mutate::fs_rename,
             fs::mutate::fs_delete,
-            fs::mutate::fs_copy,
+            fs::mutate::workflow_file_delete,
             fs::watch::fs_watch_add,
             fs::watch::fs_watch_remove,
             lsp::lsp_detect,
@@ -246,6 +423,9 @@ pub fn run() {
             shell::shell_session_open,
             shell::shell_session_run,
             shell::shell_session_close,
+            shell::workflow_shell_bg_spawn,
+            modules::capabilities::workflow_capability_audit,
+            modules::capabilities::app_capability_audit,
             shell::shell_bg_spawn,
             shell::shell_bg_logs,
             shell::shell_bg_kill,
@@ -259,27 +439,121 @@ pub fn run() {
             open_settings_window,
             agent::agent_enable_hooks,
             agent::agent_hooks_status,
+            agent::agent_enable_claude_hooks,
+            agent::agent_claude_hooks_status,
+            agent::agent_enable_codex_hooks,
+            agent::agent_codex_hooks_status,
+            agent::agent_enable_gemini_hooks,
+            agent::agent_gemini_hooks_status,
+            agent::agent_enable_antigravity_hooks,
+            agent::agent_antigravity_hooks_status,
             secrets::secrets_get,
             secrets::secrets_set,
             secrets::secrets_delete,
             secrets::secrets_get_all,
             net::lm_ping,
+            net::workflow_http_request,
             net::ai_http_request,
             net::ai_http_stream,
             history::history_suggest,
             history::history_commands,
             history::history_record,
             history::history_list,
+            browser::browser_create,
+            browser::browser_close,
+            browser::browser_navigate,
+            browser::browser_reload,
+            browser::browser_set_bounds,
+            browser::browser_hide,
+            browser::browser_show,
+            #[cfg(feature = "openclicky")]
+            overlay::overlay_show,
+            #[cfg(feature = "openclicky")]
+            overlay::overlay_hide,
+            #[cfg(feature = "openclicky")]
+            overlay::overlay_draw,
+            #[cfg(feature = "openclicky")]
+            overlay::overlay_clear,
+            #[cfg(feature = "openclicky")]
+            overlay::overlay_get_annotations,
+            #[cfg(feature = "openclicky")]
+            capture::capture_screen,
+            #[cfg(feature = "openclicky")]
+            capture::list_windows,
+            #[cfg(feature = "openclicky")]
+            capture::three_d::generate_3d_model,
+            #[cfg(feature = "openclicky")]
+            voice::tts_speak,
+            #[cfg(feature = "openclicky")]
+            voice::tts_stop,
+            #[cfg(feature = "openclicky")]
+            voice::tts_status,
+            #[cfg(feature = "openclicky")]
+            voice::transcribe_audio,
+            #[cfg(feature = "openclicky")]
+            voice::wake_word::wake_word_start,
+            #[cfg(feature = "openclicky")]
+            voice::wake_word::wake_word_detected,
+            #[cfg(feature = "openclicky")]
+            voice::wake_word::wake_word_stop,
+            #[cfg(feature = "openclicky")]
+            voice::wake_word::wake_word_status,
+            #[cfg(feature = "openclicky")]
+            voice::ptt::ptt_register,
+            #[cfg(feature = "openclicky")]
+            voice::ptt::ptt_unregister,
+            #[cfg(feature = "openclicky")]
+            tray::tray_set_icon,
+            #[cfg(feature = "openclicky")]
+            agents::agent_list,
+            #[cfg(feature = "openclicky")]
+            agents::agent_load,
+            #[cfg(feature = "openclicky")]
+            agents::agent_save,
+            #[cfg(feature = "openclicky")]
+            agents::agent_delete,
+            #[cfg(feature = "openclicky")]
+            agents::agent_memory_read,
+            #[cfg(feature = "openclicky")]
+            agents::agent_memory_append,
+            #[cfg(feature = "openclicky")]
+            agents::migrator::agents_import_openclicky,
+            #[cfg(feature = "openclicky")]
+            agents::lease::file_lease_acquire,
+            #[cfg(feature = "openclicky")]
+            agents::lease::file_lease_release,
+            #[cfg(feature = "openclicky")]
+            agents::lease::file_lease_status,
+            #[cfg(feature = "openclicky")]
+            skills::skill_list,
+            #[cfg(feature = "openclicky")]
+            skills::skill_status,
+            #[cfg(feature = "workflow")]
+            schedule::schedule_add_job,
+            #[cfg(feature = "workflow")]
+            schedule::schedule_remove_job,
+            #[cfg(feature = "workflow")]
+            schedule::schedule_toggle_job,
+            #[cfg(feature = "workflow")]
+            schedule::schedule_list_jobs,
+            #[cfg(feature = "workflow")]
+            schedule::schedule_start_daemon,
+            #[cfg(feature = "workflow")]
+            schedule::schedule_stop_daemon,
+            #[cfg(feature = "workflow")]
+            webhook::webhook_register,
+            #[cfg(feature = "workflow")]
+            webhook::webhook_unregister,
+            #[cfg(feature = "workflow")]
+            webhook::webhook_start_server,
+            #[cfg(feature = "workflow")]
+            webhook::webhook_stop_server,
+            #[cfg(feature = "workflow")]
+            webhook::webhook_list_routes,
         ])
-        .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Servers exit on stdin EOF, but destructors are not guaranteed
-            // on process exit; kill explicitly.
-            if let tauri::RunEvent::Exit = event {
-                if let Some(state) = app.try_state::<lsp::LspState>() {
-                    state.kill_all();
-                }
-            }
-        });
+        .run(tauri::generate_context!())
+    {
+        eprintln!("error while running tauri application: {error}");
+        std::process::exit(1);
+    }
 }

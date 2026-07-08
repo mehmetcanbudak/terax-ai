@@ -36,6 +36,7 @@ export type ShortcutId =
   | "view.zoomReset"
   | "view.zenMode"
   | "ai.toggle"
+  | "ai.toggleMini"
   | "ai.askSelection"
   | "agent.focusAttention"
   | "settings.open"
@@ -149,7 +150,7 @@ export const SHORTCUTS: Shortcut[] = [
     label: "Focus previous pane",
     group: "Panes",
     defaultBindings: [{ [MOD_PROP]: true, key: "[" }],
-  },  
+  },
   {
     id: "pane.source",
     label: "Toggle source panel",
@@ -242,6 +243,12 @@ export const SHORTCUTS: Shortcut[] = [
     defaultBindings: [{ [MOD_PROP]: true, key: "i" }],
   },
   {
+    id: "ai.toggleMini",
+    label: "Toggle AI chat window",
+    group: "AI",
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "i" }],
+  },
+  {
     id: "ai.askSelection",
     label: "Ask AI about selection",
     group: "AI",
@@ -301,7 +308,7 @@ export const SHORTCUTS: Shortcut[] = [
     id: "view.zenMode",
     label: "Toggle zen mode",
     group: "View",
-    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "z" }],
+    defaultBindings: [{ [MOD_PROP]: true, shift: true, key: "'" }],
   },
   // Editor entries are display-only: CodeMirror's historyKeymap binds these
   // keys natively. We register them here so the shortcuts dialog can surface
@@ -339,7 +346,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
 export function matchBinding(
   e: KeyboardEvent,
   binding: KeyBinding,
-  id?: ShortcutId
+  id?: ShortcutId,
 ): boolean {
   const eventKey = e.key.toLowerCase();
   const bindingKey = binding.key.toLowerCase();

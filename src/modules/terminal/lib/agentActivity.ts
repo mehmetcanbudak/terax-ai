@@ -21,6 +21,8 @@ export function ensureAgentActivityListener(
       active.delete(e.payload.id);
       onExited?.(e.payload.id);
     }
+  }).catch(() => {
+    bound = false;
   });
 }
 

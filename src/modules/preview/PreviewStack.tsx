@@ -1,6 +1,6 @@
+import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import type { PreviewTab, Tab } from "@/modules/tabs";
-import { useEffect, useRef } from "react";
 import { PreviewPane, type PreviewPaneHandle } from "./PreviewPane";
 
 type Props = {
@@ -74,6 +74,7 @@ export function PreviewStack({
               !visible && "invisible pointer-events-none",
             )}
             aria-hidden={!visible}
+            inert={visible ? undefined : true}
           >
             <PreviewPane
               ref={getRefCallback(t.id)}

@@ -1,3 +1,5 @@
+//! Pseudo-terminal (PTY) management: session create/write/resize/close, output streaming via Tauri channels, and agent detection (OSC 777).
+
 mod agent_detect;
 mod da_filter;
 mod session;
@@ -12,7 +14,9 @@ use std::thread;
 use portable_pty::PtySize;
 use tauri::ipc::{Channel, Response};
 
-use crate::modules::workspace::{user_spawn_cwd_or_home, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::capabilities::AppCapabilityState;
+use crate::modules::sync;
+use crate::modules::workspace::{authorize_user_spawn_cwd, WorkspaceEnv, WorkspaceRegistry};
 use session::Session;
 
 pub struct PtyState {
@@ -32,17 +36,21 @@ impl Default for PtyState {
 }
 
 impl PtyState {
-    pub(super) fn take(&self, id: u32) -> Option<Arc<Session>> {
-        self.sessions.write().unwrap().remove(&id)
+    fn take(&self, id: u32) -> Result<Option<Arc<Session>>, String> {
+        Ok(sync::write(&self.sessions, "pty sessions")?.remove(&id))
     }
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri command wrappers expose IPC fields directly"
+)]
 pub async fn pty_open(
     app: tauri::AppHandle,
     state: tauri::State<'_, PtyState>,
     registry: tauri::State<'_, WorkspaceRegistry>,
+    app_audit: tauri::State<'_, AppCapabilityState>,
     cols: u16,
     rows: u16,
     cwd: Option<String>,
@@ -53,47 +61,52 @@ pub async fn pty_open(
     on_exit: Channel<i32>,
 ) -> Result<u32, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
+    let cwd = authorize_user_spawn_cwd(&registry, cwd.as_deref(), &workspace)
+        .map(|cwd| cwd.map(|path| crate::modules::fs::to_canon(&path)))
+        .map_err(|e| {
+            log::warn!("pty_open: cwd rejected: {e}");
+            e
+        })?;
     let blocks = blocks.unwrap_or(false);
-    let cwd = user_spawn_cwd_or_home(&registry, cwd.as_deref(), &workspace);
-    let id = state.next_id.fetch_add(1, Ordering::Relaxed);
-    let session = tauri::async_runtime::spawn_blocking(move || {
-        session::spawn(id, app, cols, rows, cwd, workspace, blocks, shell, on_data, on_exit)
-            .map(|(s, _)| s)
-    })
-    .await
-    .map_err(|e| {
-        log::error!("pty_open join failed: {e}");
-        e.to_string()
-    })?
-    .map_err(|e| {
-        log::error!("pty_open failed: {e}");
-        e
-    })?;
-    state.sessions.write().unwrap().insert(id, session);
-    // The shell can exit before this insert (instant failure, `exit` in an rc
-    // file); the waiter's reap then ran with the id absent. Re-check and reap
-    // so the pseudoconsole isn't stranded.
-    let exited = state
-        .sessions
-        .read()
-        .unwrap()
-        .get(&id)
-        .map(|s| s.exited.load(Ordering::Acquire))
-        .unwrap_or(false);
-    if exited {
-        if let Some(s) = state.take(id) {
-            thread::Builder::new()
-                .name(format!("terax-pty-drop-{id}"))
-                .spawn(move || session::drop_session(s))
-                .expect("spawn pty drop thread");
-        }
-    }
-    log::info!("pty opened id={id} cols={cols} rows={rows}");
-    Ok(id)
+    // Opening an interactive shell is the highest-risk OS surface; record it in
+    // the capability audit so the ledger accounts for every shell spawn.
+    app_audit
+        .execute_app_capability_async("app.pty_session", || async move {
+            let id = state.next_id.fetch_add(1, Ordering::Relaxed);
+            let session = tauri::async_runtime::spawn_blocking(move || {
+                session::spawn(
+                    id, app, cols, rows, cwd, workspace, blocks, shell, on_data, on_exit,
+                )
+                .map(|(s, _)| s)
+            })
+            .await
+            .map_err(|e| {
+                log::error!("pty_open join failed: {e}");
+                e.to_string()
+            })?
+            .map_err(|e| {
+                log::error!("pty_open failed: {e}");
+                e
+            })?;
+            sync::write(&state.sessions, "pty sessions")?.insert(id, session);
+            let exited = sync::read(&state.sessions, "pty sessions")?
+                .get(&id)
+                .map(|session| session.exited.load(Ordering::Acquire))
+                .unwrap_or(false);
+            if exited {
+                if let Some(session) = state.take(id)? {
+                    thread::Builder::new()
+                        .name(format!("terax-pty-drop-{id}"))
+                        .spawn(move || session::drop_session(session))
+                        .map_err(|error| format!("spawn pty drop thread: {error}"))?;
+                }
+            }
+            log::info!("pty opened id={id} cols={cols} rows={rows}");
+            Ok(id)
+        })
+        .await
 }
 
-// Input is the latency-critical path: raw body + id header skips JSON
-// serialization of every keystroke on both sides of the IPC boundary.
 #[tauri::command]
 pub fn pty_write(
     state: tauri::State<PtyState>,
@@ -102,28 +115,22 @@ pub fn pty_write(
     let id: u32 = request
         .headers()
         .get("x-pty-id")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
         .ok_or_else(|| "pty_write: missing x-pty-id header".to_string())?;
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("pty_write: expected raw body".to_string());
     };
-    let session = state
-        .sessions
-        .read()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| {
+    let session = {
+        let sessions = sync::read(&state.sessions, "pty sessions")?;
+        sessions.get(&id).cloned().ok_or_else(|| {
             log::warn!("pty_write: unknown id={id}");
             "no session".to_string()
-        })?;
-    // Bind to a local so the MutexGuard temporary drops before `session` —
+        })?
+    };
+    // Bind to a local so the MutexGuard temporary drops before `session` -
     // see rustc note on tail-expression temporary drop order.
-    let result = session
-        .writer
-        .lock()
-        .unwrap()
+    let result = sync::mutex(&session.writer, "pty writer")?
         .write_all(bytes)
         .map_err(|e| {
             // EPIPE is expected if the child already exited.
@@ -140,20 +147,17 @@ pub fn pty_resize(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let session = state
-        .sessions
-        .read()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| {
+    let session = {
+        let sessions = sync::read(&state.sessions, "pty sessions")?;
+        sessions.get(&id).cloned().ok_or_else(|| {
             log::warn!("pty_resize: unknown id={id}");
             "no session".to_string()
-        })?;
+        })?
+    };
     let result = session
         .master
         .lock()
-        .unwrap()
+        .map_err(|error| format!("pty master lock failed: {error}"))?
         .resize(PtySize {
             rows,
             cols,
@@ -169,9 +173,9 @@ pub fn pty_resize(
 
 #[tauri::command]
 pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
-    let session = state.sessions.write().unwrap().remove(&id);
+    let session = sync::write(&state.sessions, "pty sessions")?.remove(&id);
     if let Some(s) = session {
-        if let Err(e) = s.killer.lock().unwrap().kill() {
+        if let Err(e) = sync::mutex(&s.killer, "pty killer")?.kill() {
             // Non-fatal: the child may already have exited on its own (e.g. the
             // user ran `exit`). Log so this isn't invisible during debugging.
             log::debug!("pty_close: kill id={id} returned {e}");
@@ -189,7 +193,7 @@ pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
                     t0.elapsed().as_millis()
                 );
             })
-            .expect("spawn pty drop thread");
+            .map_err(|error| format!("spawn pty drop thread: {error}"))?;
     } else {
         log::debug!("pty_close: unknown id={id}");
     }
@@ -198,7 +202,7 @@ pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
 
 #[tauri::command]
 pub fn pty_has_foreground_process(state: tauri::State<PtyState>, id: u32) -> Result<bool, String> {
-    let sessions = state.sessions.read().unwrap();
+    let sessions = sync::read(&state.sessions, "pty sessions")?;
     let session = sessions.get(&id).ok_or_else(|| {
         log::warn!("pty_has_foreground_process: unknown session id={id}");
         "no session".to_string()
@@ -215,7 +219,7 @@ pub fn pty_has_foreground_process(state: tauri::State<PtyState>, id: u32) -> Res
 // pty_has_foreground_process, which counts background children too.
 #[tauri::command]
 pub fn pty_has_foreground_job(state: tauri::State<PtyState>, id: u32) -> Result<bool, String> {
-    let sessions = state.sessions.read().unwrap();
+    let sessions = sync::read(&state.sessions, "pty sessions")?;
     let session = sessions.get(&id).ok_or_else(|| {
         log::warn!("pty_has_foreground_job: unknown session id={id}");
         "no session".to_string()
@@ -226,7 +230,7 @@ pub fn pty_has_foreground_job(state: tauri::State<PtyState>, id: u32) -> Result<
     }
     #[cfg(unix)]
     {
-        let leader = session.master.lock().unwrap().process_group_leader();
+        let leader = sync::mutex(&session.master, "pty master")?.process_group_leader();
         Ok(matches!(leader, Some(pid) if pid > 0 && pid as u32 != shell_pid))
     }
     #[cfg(windows)]
@@ -235,8 +239,41 @@ pub fn pty_has_foreground_job(state: tauri::State<PtyState>, id: u32) -> Result<
     }
 }
 
-// pgrep -P exits 0 when shell_pid has at least one child, 1 when none.
-#[cfg(unix)]
+#[cfg(all(unix, target_os = "linux"))]
+fn shell_has_children(shell_pid: u32) -> bool {
+    std::fs::read_dir("/proc")
+        .map(|mut entries| {
+            entries.any(|entry| {
+                let Ok(entry) = entry else {
+                    return false;
+                };
+                let name = entry.file_name();
+                let Ok(child_pid) = name.to_string_lossy().parse::<u32>() else {
+                    return false;
+                };
+                if child_pid == shell_pid {
+                    return false;
+                }
+                let Ok(stat) = std::fs::read_to_string(format!("/proc/{child_pid}/stat")) else {
+                    return false;
+                };
+                let Some(rest) = stat.rsplit(')').next() else {
+                    return false;
+                };
+                let Some(ppid) = rest
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|value| value.parse::<u32>().ok())
+                else {
+                    return false;
+                };
+                ppid == shell_pid
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(all(unix, target_os = "macos"))]
 fn shell_has_children(shell_pid: u32) -> bool {
     std::process::Command::new("pgrep")
         .args(["-P", &shell_pid.to_string()])
@@ -250,9 +287,11 @@ fn shell_has_children(shell_pid: u32) -> bool {
     use std::mem::{size_of, zeroed};
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
-        TH32CS_SNAPPROCESS,
+        CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
     };
+    // SAFETY: The snapshot handle is checked before use, PROCESSENTRY32 is
+    // zero-initialized with `dwSize` set as required by ToolHelp APIs, and the
+    // handle is closed exactly once before returning.
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if snapshot == INVALID_HANDLE_VALUE {
@@ -282,18 +321,18 @@ fn shell_has_children(shell_pid: u32) -> bool {
 #[tauri::command]
 pub fn pty_close_all(state: tauri::State<PtyState>) -> Result<usize, String> {
     let drained: Vec<(u32, Arc<Session>)> = {
-        let mut sessions = state.sessions.write().unwrap();
+        let mut sessions = sync::write(&state.sessions, "pty sessions")?;
         sessions.drain().collect()
     };
     let count = drained.len();
     for (id, s) in drained {
-        if let Err(e) = s.killer.lock().unwrap().kill() {
+        if let Err(e) = sync::mutex(&s.killer, "pty killer")?.kill() {
             log::debug!("pty_close_all: kill id={id} returned {e}");
         }
         thread::Builder::new()
             .name(format!("terax-pty-drop-{id}"))
             .spawn(move || session::drop_session(s))
-            .expect("spawn pty drop thread");
+            .map_err(|error| format!("spawn pty drop thread: {error}"))?;
     }
     if count > 0 {
         log::info!("pty_close_all: reaped {count} orphaned session(s)");

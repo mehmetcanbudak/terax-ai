@@ -233,18 +233,50 @@ mod unix {
 
     fn login_shell() -> Option<String> {
         use std::ffi::CStr;
-        unsafe {
-            let uid = libc::getuid();
-            let pw = libc::getpwuid(uid);
-            if pw.is_null() {
-                return None;
-            }
-            let shell_ptr = (*pw).pw_shell;
-            if shell_ptr.is_null() {
-                return None;
-            }
-            CStr::from_ptr(shell_ptr).to_str().ok().map(String::from)
+        use std::mem::MaybeUninit;
+        use std::ptr;
+
+        // SAFETY: sysconf is called with a valid name and has no Rust-side
+        // aliasing requirements. A non-positive result is handled by falling
+        // back to a conservative POSIX buffer size.
+        let suggested_len = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
+        let buffer_len = if suggested_len > 0 {
+            suggested_len as usize
+        } else {
+            16 * 1024
+        };
+        let mut buffer = vec![0_u8; buffer_len];
+        let mut passwd = MaybeUninit::<libc::passwd>::uninit();
+        let mut result = ptr::null_mut();
+
+        // SAFETY: `passwd` points to writable storage, `buffer` is a writable
+        // byte buffer that remains alive while returned fields are read, and
+        // `result` is a valid out-parameter. `getpwuid_r` initializes `passwd`
+        // only when it returns 0 with a non-null result.
+        let status = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                passwd.as_mut_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                &mut result,
+            )
+        };
+        if status != 0 || result.is_null() {
+            return None;
         }
+
+        // SAFETY: `result` is non-null only after `getpwuid_r` has initialized
+        // `passwd`, and `pw_shell` points into `buffer`, which is still alive.
+        let shell_ptr = unsafe { (*result).pw_shell };
+        if shell_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: libc returns a NUL-terminated C string for `pw_shell`.
+        unsafe { CStr::from_ptr(shell_ptr) }
+            .to_str()
+            .ok()
+            .map(String::from)
     }
 
     pub fn list_shells() -> Vec<super::ShellInfo> {
@@ -306,7 +338,7 @@ mod unix {
                         log::warn!("zsh shell integration disabled: {e}");
                     }
                 }
-                // Login shell so /etc/zprofile runs path_helper on macOS — without
+                // Login shell so /etc/zprofile runs path_helper on macOS - without
                 // this, GUI-launched apps get a minimal PATH missing Homebrew.
                 cmd.arg("-l");
             }
@@ -391,9 +423,12 @@ mod unix {
         let tmp = PathBuf::from(tmp);
         fs::write(&tmp, content).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         fs::rename(&tmp, path).map_err(|e| {
-            let _ = fs::remove_file(&tmp);
+            if let Err(cleanup_err) = fs::remove_file(&tmp) {
+                log::debug!("unix shell init cleanup failed: {cleanup_err}");
+            }
             format!("rename {} -> {}: {e}", tmp.display(), path.display())
-        })
+        })?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -857,9 +892,12 @@ mod windows {
         let tmp = PathBuf::from(tmp);
         fs::write(&tmp, content).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         fs::rename(&tmp, path).map_err(|e| {
-            let _ = fs::remove_file(&tmp);
+            if let Err(cleanup_err) = fs::remove_file(&tmp) {
+                log::debug!("windows shell init cleanup failed: {cleanup_err}");
+            }
             format!("rename {} -> {}: {e}", tmp.display(), path.display())
-        })
+        })?;
+        Ok(())
     }
 
     #[cfg(test)]

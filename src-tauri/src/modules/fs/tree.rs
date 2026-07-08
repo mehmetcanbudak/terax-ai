@@ -1,10 +1,8 @@
-use std::collections::HashSet;
-use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-use ignore::WalkBuilder;
 use serde::Serialize;
 
+use crate::modules::capabilities::AppCapabilityState;
 use crate::modules::workspace::{resolve_path, WorkspaceEnv};
 
 #[derive(Serialize)]
@@ -22,68 +20,21 @@ pub struct DirEntry {
     pub size: u64,
     /// Milliseconds since UNIX epoch; 0 if unavailable.
     pub mtime: u64,
-    pub gitignored: bool,
-}
-
-// Whether `dir` is inside a git repo. Walks up only; never descends into
-// siblings, so it does not touch protected macOS folders (Desktop, ...).
-fn in_git_repo(dir: &Path) -> bool {
-    let mut cur = dir;
-    loop {
-        if cur.join(".git").exists() {
-            return true;
-        }
-        match cur.parent() {
-            Some(p) => cur = p,
-            None => return false,
-        }
-    }
-}
-
-// Immediate children of `dir` that git does not ignore. Outside a repo every
-// name is returned, so nothing is dimmed.
-fn git_non_ignored_names(dir: &Path, show_hidden: bool) -> HashSet<String> {
-    WalkBuilder::new(dir)
-        .hidden(!show_hidden)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(false)
-        .parents(true)
-        .max_depth(Some(1))
-        .follow_links(false)
-        .build()
-        .flatten()
-        .filter_map(|d| d.file_name().to_str().map(str::to_string))
-        .collect()
 }
 
 /// Lists immediate children of `path`. Dirs first, then files, each sorted
 /// case-insensitively. Dot-prefixed entries (files and dirs) are hidden unless
-/// `show_hidden` is set. `git_decorations` opts into the per-entry `gitignored`
-/// flag; off by default so non-explorer callers pay nothing.
-#[tauri::command]
-pub fn fs_read_dir(
+/// `show_hidden` is set.
+pub fn fs_read_dir_inner(
     path: String,
     show_hidden: bool,
-    git_decorations: Option<bool>,
-    workspace: Option<WorkspaceEnv>,
+    workspace: WorkspaceEnv,
 ) -> Result<Vec<DirEntry>, String> {
-    let workspace = WorkspaceEnv::from_option(workspace);
     let root = resolve_path(&path, &workspace);
     let read = std::fs::read_dir(&root).map_err(|e| {
         log::debug!("fs_read_dir({}) failed: {e}", root.display());
         e.to_string()
     })?;
-
-    // Gate on a real repo: outside one the walk is pointless and would probe
-    // each child for a nested `.git`, which trips macOS folder-access prompts.
-    let git_decorations = git_decorations.unwrap_or(false) && in_git_repo(&root);
-    let git_visible = if git_decorations {
-        git_non_ignored_names(&root, show_hidden)
-    } else {
-        HashSet::new()
-    };
 
     let mut entries: Vec<DirEntry> = read
         .filter_map(Result::ok)
@@ -120,42 +71,48 @@ pub fn fs_read_dir(
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
 
-            let gitignored = git_decorations && !git_visible.contains(&name);
             Some(DirEntry {
                 name,
                 kind,
                 size,
                 mtime,
-                gitignored,
             })
         })
         .collect();
 
-    entries.sort_by(|a, b| {
-        let rank = |k: &EntryKind| match k {
+    entries.sort_by_cached_key(|entry| {
+        let rank = match entry.kind {
             EntryKind::Dir => 0,
             EntryKind::Symlink => 1,
             EntryKind::File => 2,
         };
-        rank(&a.kind)
-            .cmp(&rank(&b.kind))
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        (rank, entry.name.to_lowercase())
     });
 
     Ok(entries)
+}
+
+#[tauri::command]
+pub fn fs_read_dir(
+    app_audit: tauri::State<AppCapabilityState>,
+    path: String,
+    show_hidden: bool,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<Vec<DirEntry>, String> {
+    app_audit.execute_app_capability("app.file_list", || {
+        fs_read_dir_inner(path, show_hidden, WorkspaceEnv::from_option(workspace))
+    })
 }
 
 /// Lists immediate subdirectories of `path`. Kept for the CwdBreadcrumb.
 ///
 /// Symlinks to directories are included (matches shell `cd` semantics).
 /// Hidden entries are filtered by dot-prefix only.
-#[tauri::command]
-pub fn list_subdirs(
+pub fn list_subdirs_inner(
     path: String,
     show_hidden: bool,
-    workspace: Option<WorkspaceEnv>,
+    workspace: WorkspaceEnv,
 ) -> Result<Vec<String>, String> {
-    let workspace = WorkspaceEnv::from_option(workspace);
     let root = resolve_path(&path, &workspace);
     let read = std::fs::read_dir(&root).map_err(|e| {
         log::debug!("list_subdirs({}) read_dir failed: {e}", root.display());
@@ -175,6 +132,18 @@ pub fn list_subdirs(
         .filter(|name| show_hidden || !name.starts_with('.'))
         .collect();
 
-    dirs.sort_by_key(|a| a.to_lowercase());
+    dirs.sort_by_cached_key(|a| a.to_lowercase());
     Ok(dirs)
+}
+
+#[tauri::command]
+pub fn list_subdirs(
+    app_audit: tauri::State<AppCapabilityState>,
+    path: String,
+    show_hidden: bool,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<Vec<String>, String> {
+    app_audit.execute_app_capability("app.file_list", || {
+        list_subdirs_inner(path, show_hidden, WorkspaceEnv::from_option(workspace))
+    })
 }

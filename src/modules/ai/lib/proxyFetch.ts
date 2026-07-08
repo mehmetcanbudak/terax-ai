@@ -9,6 +9,9 @@ type AiStreamEvent =
 
 type RequestHeaders = Record<string, string>;
 
+const FORM_URLENCODED_CONTENT_TYPE =
+  "application/x-www-form-urlencoded;charset=UTF-8";
+
 function headerInitToRecord(
   init: HeadersInit | undefined,
 ): RequestHeaders | undefined {
@@ -24,6 +27,24 @@ function headerInitToRecord(
     for (const [k, v] of Object.entries(init)) out[k] = String(v);
   }
   return out;
+}
+
+function hasHeader(headers: RequestHeaders | undefined, name: string): boolean {
+  return Object.keys(headers ?? {}).some(
+    (key) => key.toLowerCase() === name.toLowerCase(),
+  );
+}
+
+function headersForBody(
+  headers: RequestHeaders | undefined,
+  body: BodyInit | null | undefined,
+): RequestHeaders | undefined {
+  if (!(body instanceof URLSearchParams)) return headers;
+  if (hasHeader(headers, "content-type")) return headers;
+  return {
+    ...(headers ?? {}),
+    "content-type": FORM_URLENCODED_CONTENT_TYPE,
+  };
 }
 
 async function bodyToBytes(
@@ -42,7 +63,10 @@ async function bodyToBytes(
   }
   if (body instanceof Blob)
     return Array.from(new Uint8Array(await body.arrayBuffer()));
-  // FormData / URLSearchParams / ReadableStream — uncommon for AI SDK calls.
+  if (body instanceof URLSearchParams) {
+    return Array.from(new TextEncoder().encode(body.toString()));
+  }
+  // FormData / ReadableStream - uncommon for AI SDK calls.
   const text = await new Response(body as BodyInit).text();
   return Array.from(new TextEncoder().encode(text));
 }
@@ -54,7 +78,7 @@ export function createProxyFetch(
   return async (input, init) => proxyFetchImpl(input, init, allowPrivate);
 }
 
-/** Backwards-compatible default — refuses private networks unless the caller
+/** Backwards-compatible default. Refuses private networks unless the caller
  *  explicitly opts in via {@link createProxyFetch}. */
 export const proxyFetch: typeof fetch = (input, init) =>
   proxyFetchImpl(input, init, false);
@@ -66,7 +90,7 @@ async function proxyFetchImpl(
 ): Promise<Response> {
   const url = input instanceof URL ? input.toString() : String(input);
   const method = (init?.method ?? "GET").toUpperCase();
-  const headers = headerInitToRecord(init?.headers);
+  const headers = headersForBody(headerInitToRecord(init?.headers), init?.body);
   const body = await bodyToBytes(init?.body);
 
   const signal = init?.signal;
@@ -141,6 +165,7 @@ async function proxyFetchImpl(
       headers,
       body,
       allowPrivateNetwork,
+      maxBodyBytes: null,
       onEvent: channel,
     }).catch((e) => {
       if (resolved) return; // headers already arrived; chunk-side error wins

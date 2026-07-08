@@ -615,7 +615,10 @@ export const SourceControlPanel = memo(function SourceControlPanel({
 
   return (
     <TooltipProvider delayDuration={800} skipDelayDuration={300}>
-      <aside className="flex h-full min-w-0 flex-col bg-card/80 backdrop-blur [contain:layout_style]">
+      <aside
+        aria-label="Source control"
+        className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card/80 backdrop-blur [contain:layout_style]"
+      >
         <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border/50 px-3 pb-2.5 pt-3">
           <div className="flex min-w-0 items-center gap-1.5">
             <BranchDropdown
@@ -778,7 +781,8 @@ export const SourceControlPanel = memo(function SourceControlPanel({
                   value={scm.commitMessage}
                   onChange={(event) => scm.setCommitMessage(event.target.value)}
                   onKeyDown={handleCommitShortcut}
-                  placeholder="Commit message"
+                  aria-label="Commit message"
+                  placeholder="Commit message…"
                   rows={3}
                   className={cn(
                     "min-h-[72px] border-border resize-none rounded-lg bg-transparent px-3 pb-7 pt-2.5 text-[12.5px] leading-snug shadow-none placeholder:text-muted-foreground/65 focus-visible:ring-0 focus:border-0",

@@ -7,9 +7,18 @@ import {
   getAllKeys,
   hasAnyKey,
 } from "../lib/keyring";
+import { E2E_MOCK_MODEL_ID, isE2eMockEnabled } from "../lib/mockFlags";
 import { useAgentsStore } from "../store/agentsStore";
 import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
+
+type E2eChatReadyWindow = typeof window & {
+  __TERAX_E2E_CHAT_READY__?: () => {
+    activeSessionId: string | null;
+    selectedModelId: string;
+    sessionsHydrated: boolean;
+  };
+};
 
 /**
  * Startup wiring for the AI subsystem: loads provider keys (and keeps them in
@@ -54,7 +63,8 @@ export function useAiBootstrap(): {
     customEndpoints.some(
       (e) => e.baseURL.trim().length > 0 && e.modelId.trim().length > 0,
     );
-  const hasComposer = hasAnyKey(apiKeys) || hasLocalModel;
+  const e2eMockEnabled = isE2eMockEnabled();
+  const hasComposer = e2eMockEnabled || hasAnyKey(apiKeys) || hasLocalModel;
 
   const prefsHydrated = usePreferencesStore((s) => s.hydrated);
   const [keysLoaded, setKeysLoaded] = useState(false);
@@ -90,9 +100,29 @@ export function useAiBootstrap(): {
     void initPrefs();
   }, [initPrefs]);
   useEffect(() => {
-    if (!prefsHydrated) return;
+    if (!e2eMockEnabled) return;
+    setSelectedModelId(E2E_MOCK_MODEL_ID);
+  }, [e2eMockEnabled, setSelectedModelId]);
+  useEffect(() => {
+    if (e2eMockEnabled || !prefsHydrated) return;
     setSelectedModelId(prefDefaultModel);
-  }, [prefsHydrated, prefDefaultModel, setSelectedModelId]);
+  }, [e2eMockEnabled, prefsHydrated, prefDefaultModel, setSelectedModelId]);
+
+  useEffect(() => {
+    if (!e2eMockEnabled || typeof window === "undefined") return;
+    const e2eWindow = window as E2eChatReadyWindow;
+    e2eWindow.__TERAX_E2E_CHAT_READY__ = () => {
+      const state = useChatStore.getState();
+      return {
+        activeSessionId: state.activeSessionId,
+        selectedModelId: state.selectedModelId,
+        sessionsHydrated: state.sessionsHydrated,
+      };
+    };
+    return () => {
+      delete e2eWindow.__TERAX_E2E_CHAT_READY__;
+    };
+  }, [e2eMockEnabled]);
 
   useEffect(() => {
     void hydrateSessions();

@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, ChildKiller, MasterPty, PtySize};
 use tauri::ipc::{Channel, Response};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use super::agent_detect::AgentDetector;
 use super::da_filter::DaFilter;
@@ -32,26 +32,26 @@ const OVERFLOW_NOTICE: &[u8] =
 
 pub struct Session {
     // Field drop order is intentional. Rust drops fields top-to-bottom:
-    //   1. `_job` — on Windows, closing the Job HANDLE fires
+    //   1. `_job` - on Windows, closing the Job HANDLE fires
     //      KILL_ON_JOB_CLOSE, terminating the pwsh tree before the master
     //      pipe drops. Without this, ClosePseudoConsole in `master`'s Drop
     //      can block waiting for conhost to drain pending output, freezing
     //      the Tauri worker thread that triggered the close.
-    //   2. `killer` — best-effort kill (redundant on Windows once Job
+    //   2. `killer` - best-effort kill (redundant on Windows once Job
     //      closed, but harmless and required on Unix where there is no Job).
-    //   3. `writer` — closes the input side of the master pipe.
-    //   4. `master` — last; ClosePseudoConsole on Windows. By now the child
+    //   3. `writer` - closes the input side of the master pipe.
+    //   4. `master` - last; ClosePseudoConsole on Windows. By now the child
     //      is dead and conhost has nothing left to drain.
     #[cfg(windows)]
-    _job: Option<crate::modules::proc::job::ProcessJob>,
+    _job: Option<crate::modules::proc::job::PtyJob>,
     /// PID of the shell process. 0 means unknown; callers must skip checks when 0.
     pub shell_pid: u32,
+    // Set by the waiter once the child exits, so pty_open can reap a shell
+    // that exits before the session is inserted into the state map.
+    pub(super) exited: Arc<AtomicBool>,
     pub killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub master: Mutex<Box<dyn MasterPty + Send>>,
-    // Set by the waiter once the child exits, so pty_open can reap a shell
-    // that died before it was registered.
-    pub(super) exited: Arc<AtomicBool>,
 }
 
 impl Drop for Session {
@@ -72,7 +72,17 @@ static CONPTY_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
 
 pub(super) fn drop_session(session: Arc<Session>) {
     #[cfg(windows)]
-    let _guard = CONPTY_LIFECYCLE_LOCK.lock().unwrap();
+    {
+        let _guard = match CONPTY_LIFECYCLE_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(error) => {
+                log::error!("conpty lifecycle lock poisoned during drop: {error}");
+                error.into_inner()
+            }
+        };
+        drop(session);
+    }
+    #[cfg(not(windows))]
     drop(session);
 }
 
@@ -82,7 +92,9 @@ struct ChildKillGuard {
 
 impl ChildKillGuard {
     fn new(killer: Box<dyn ChildKiller + Send + Sync>) -> Self {
-        Self { killer: Some(killer) }
+        Self {
+            killer: Some(killer),
+        }
     }
 
     fn disarm(&mut self) {
@@ -98,7 +110,10 @@ impl Drop for ChildKillGuard {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PTY setup needs independent Tauri channels and terminal dimensions"
+)]
 pub fn spawn(
     id: u32,
     app: AppHandle,
@@ -112,7 +127,9 @@ pub fn spawn(
     on_exit: Channel<i32>,
 ) -> Result<(Arc<Session>, PtySize), String> {
     #[cfg(windows)]
-    let _spawn_guard = CONPTY_LIFECYCLE_LOCK.lock().unwrap();
+    let _spawn_guard = CONPTY_LIFECYCLE_LOCK
+        .lock()
+        .map_err(|error| format!("conpty lifecycle lock failed: {error}"))?;
 
     let pty_system = native_pty_system();
     let size = PtySize {
@@ -135,13 +152,12 @@ pub fn spawn(
     let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(
         pair.master.take_writer().map_err(|e| e.to_string())?,
     ));
-    guard.disarm();
 
     let shell_pid = child.process_id().unwrap_or(0);
 
     #[cfg(windows)]
     let job = match child.process_id() {
-        Some(pid) => match crate::modules::proc::job::ProcessJob::create_for(pid) {
+        Some(pid) => match crate::modules::proc::job::PtyJob::create_for(pid) {
             Ok(j) => Some(j),
             Err(e) => {
                 log::warn!("pty job-object setup failed for pid={pid}: {e}");
@@ -157,25 +173,20 @@ pub fn spawn(
         #[cfg(windows)]
         _job: job,
         shell_pid,
+        exited: exited.clone(),
         killer: Mutex::new(killer),
         writer: writer.clone(),
         master: Mutex::new(pair.master),
-        exited: exited.clone(),
     });
 
-    let pending: Arc<(Mutex<Vec<u8>>, Condvar)> = Arc::new((
-        Mutex::new(Vec::with_capacity(READ_BUF)),
-        Condvar::new(),
-    ));
+    let pending: Arc<(Mutex<Vec<u8>>, Condvar)> =
+        Arc::new((Mutex::new(Vec::with_capacity(READ_BUF)), Condvar::new()));
     let done = Arc::new(AtomicBool::new(false));
     let spawn_at = Instant::now();
 
-    let first_byte = Arc::new(AtomicBool::new(false));
-
     let pending_r = pending.clone();
     let writer_for_da = writer.clone();
-    let app_reader = app.clone();
-    let first_byte_r = first_byte;
+    let app_reader = app;
     let reader_thread = thread::Builder::new()
         .name("terax-pty-reader".into())
         .spawn(move || {
@@ -184,13 +195,17 @@ pub fn spawn(
             let mut da_filter = DaFilter::new();
             let mut agent_detect = AgentDetector::new();
             let mut dropped_bytes: u64 = 0;
+            let mut logged_first = false;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if !first_byte_r.load(Ordering::Relaxed) {
-                            first_byte_r.store(true, Ordering::Release);
-                            log::debug!("pty first byte after {}ms", spawn_at.elapsed().as_millis());
+                        if !logged_first {
+                            logged_first = true;
+                            log::debug!(
+                                "pty first byte after {}ms",
+                                spawn_at.elapsed().as_millis()
+                            );
                         }
                         agent_detect.process(&buf[..n], |t| {
                             let _ = app_reader.emit(AGENT_EVENT, t.into_signal(id));
@@ -205,7 +220,13 @@ pub fn spawn(
                             continue;
                         }
                         let (lock, cv) = &*pending_r;
-                        let mut g = lock.lock().unwrap();
+                        let mut g = match lock.lock() {
+                            Ok(guard) => guard,
+                            Err(error) => {
+                                log::error!("pty pending buffer lock failed: {error}");
+                                break;
+                            }
+                        };
                         if g.len() + filtered.len() > MAX_PENDING {
                             dropped_bytes += g.len() as u64;
                             g.clear();
@@ -228,7 +249,7 @@ pub fn spawn(
                 log::warn!("pty backpressure: dropped {dropped_bytes} bytes (cap {MAX_PENDING})");
             }
         })
-        .expect("spawn pty reader thread");
+        .map_err(|error| format!("spawn pty reader thread: {error}"))?;
 
     let on_data_flush = on_data.clone();
     let pending_f = pending.clone();
@@ -239,18 +260,35 @@ pub fn spawn(
             let (lock, cv) = &*pending_f;
             loop {
                 {
-                    let mut g = lock.lock().unwrap();
+                    let mut g = match lock.lock() {
+                        Ok(guard) => guard,
+                        Err(error) => {
+                            log::error!("pty pending buffer lock failed: {error}");
+                            return;
+                        }
+                    };
                     while g.is_empty() {
                         if done_f.load(Ordering::Acquire) {
                             return;
                         }
-                        let (next, _) = cv.wait_timeout(g, FLUSH_MAX_IDLE).unwrap();
-                        g = next;
+                        match cv.wait_timeout(g, FLUSH_MAX_IDLE) {
+                            Ok((next, _)) => g = next,
+                            Err(error) => {
+                                log::error!("pty pending buffer wait failed: {error}");
+                                return;
+                            }
+                        }
                     }
                 }
                 // Coalesce a short window so a burst flushes as one chunk.
                 thread::sleep(FLUSH_COALESCE);
-                let chunk = std::mem::take(&mut *lock.lock().unwrap());
+                let chunk = match lock.lock() {
+                    Ok(mut guard) => std::mem::take(&mut *guard),
+                    Err(error) => {
+                        log::error!("pty pending buffer lock failed: {error}");
+                        return;
+                    }
+                };
                 if chunk.is_empty() {
                     continue;
                 }
@@ -260,13 +298,16 @@ pub fn spawn(
                 }
             }
         })
-        .expect("spawn pty flusher thread");
+        .map_err(|error| {
+            done.store(true, Ordering::Release);
+            pending.1.notify_all();
+            format!("spawn pty flusher thread: {error}")
+        })?;
 
     let on_data_exit = on_data;
-    let pending_e = pending;
-    let done_e = done;
-    let app_waiter = app;
-    let exited_w = exited;
+    let pending_e = pending.clone();
+    let done_e = done.clone();
+    let exited_e = exited;
     thread::Builder::new()
         .name("terax-pty-waiter".into())
         .spawn(move || {
@@ -277,7 +318,6 @@ pub fn spawn(
                     -1
                 }
             };
-            exited_w.store(true, Ordering::Release);
             // Wait for the reader to hit EOF before taking a final snapshot of
             // `pending`, so the last line of output never races the Exit event.
             #[cfg(windows)]
@@ -292,25 +332,32 @@ pub fn spawn(
                 log::error!("pty reader thread panicked: {e:?}");
             }
             let (lock, cv) = &*pending_e;
-            let tail = std::mem::take(&mut *lock.lock().unwrap());
+            let tail = match lock.lock() {
+                Ok(mut guard) => std::mem::take(&mut *guard),
+                Err(error) => {
+                    log::error!("pty pending buffer lock failed: {error}");
+                    Vec::new()
+                }
+            };
             if !tail.is_empty() {
                 if let Err(e) = on_data_exit.send(Response::new(tail)) {
                     log::debug!("pty final-data send failed (channel closed): {e}");
                 }
             }
+            exited_e.store(true, Ordering::Release);
             done_e.store(true, Ordering::Release);
             cv.notify_all();
             if let Err(e) = on_exit.send(code) {
                 log::debug!("pty exit send failed (channel closed): {e}");
             }
-            if let Some(state) = app_waiter.try_state::<super::PtyState>() {
-                if let Some(s) = state.take(id) {
-                    drop_session(s);
-                }
-            }
         })
-        .expect("spawn pty waiter thread");
+        .map_err(|error| {
+            done.store(true, Ordering::Release);
+            pending.1.notify_all();
+            format!("spawn pty waiter thread: {error}")
+        })?;
 
+    guard.disarm();
     Ok((session, size))
 }
 
@@ -342,10 +389,10 @@ mod tests {
 
         let session = Arc::new(Session {
             shell_pid: child.process_id().unwrap_or(0),
+            exited: Arc::new(AtomicBool::new(false)),
             killer: Mutex::new(killer),
             writer,
             master: Mutex::new(pair.master),
-            exited: Arc::new(AtomicBool::new(false)),
         });
 
         assert!(
@@ -391,10 +438,10 @@ mod tests {
 
         let session = Arc::new(Session {
             shell_pid: 0,
+            exited: Arc::new(AtomicBool::new(false)),
             killer: Mutex::new(killer),
             writer,
             master: Mutex::new(pair.master),
-            exited: Arc::new(AtomicBool::new(false)),
         });
 
         drop_session(session);

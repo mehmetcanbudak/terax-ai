@@ -70,7 +70,7 @@ export function StatusBar({
       <div className="flex shrink-0 items-center gap-1.5">
         <AgentStatusPill onClick={onOpenMini} />
         {panelOpen && hasComposer ? (
-          <AiStatusBarControls />
+          <AiStatusBarControls onOpenConversation={onOpenMini} />
         ) : (
           <AiOpenButton onOpen={openPanel} />
         )}

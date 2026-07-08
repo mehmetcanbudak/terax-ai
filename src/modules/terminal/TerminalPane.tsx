@@ -94,6 +94,7 @@ export const TerminalPane = memo(
     if (blocks) {
       return (
         <div
+          data-testid="terminal-pane"
           className="zoom-exempt flex h-full w-full flex-col"
           style={hideStyle}
         >
@@ -139,6 +140,7 @@ export const TerminalPane = memo(
     return (
       <div
         ref={containerRef}
+        data-testid="terminal-pane"
         className="zoom-exempt h-full w-full"
         style={hideStyle}
       />

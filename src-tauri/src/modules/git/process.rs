@@ -15,9 +15,9 @@ use crate::modules::git::types::{
     GitOutput, TextSource, DEFAULT_TIMEOUT_SECS, MAX_FILE_BYTES, MAX_OUTPUT_BYTES,
     MAX_TIMEOUT_SECS, MIN_GIT_VERSION,
 };
-use crate::modules::workspace::WorkspaceEnv;
 #[cfg(windows)]
 use crate::modules::workspace::validate_wsl_distro_name;
+use crate::modules::workspace::WorkspaceEnv;
 
 #[derive(Clone)]
 enum Availability {
@@ -53,9 +53,9 @@ fn workspace_cache_key(workspace: &WorkspaceEnv) -> String {
 pub fn ensure_git_available(workspace: &WorkspaceEnv) -> Result<()> {
     let cache_key = workspace_cache_key(workspace);
     let cached = {
-        let mut guard = availability_cell()
-            .lock()
-            .expect("git availability poisoned");
+        let mut guard = availability_cell().lock().map_err(|error| {
+            GitError::command("git availability lock failed", error.to_string())
+        })?;
         prune_expired_availability_entries(&mut guard);
         guard
             .get(&cache_key)
@@ -66,9 +66,9 @@ pub fn ensure_git_available(workspace: &WorkspaceEnv) -> Result<()> {
         Some(v) => v,
         None => {
             let fresh = check_git_availability(workspace);
-            let mut guard = availability_cell()
-                .lock()
-                .expect("git availability poisoned");
+            let mut guard = availability_cell().lock().map_err(|error| {
+                GitError::command("git availability lock failed", error.to_string())
+            })?;
             prune_expired_availability_entries(&mut guard);
             guard.insert(
                 cache_key,
@@ -390,11 +390,11 @@ fn drain<R: Read>(reader: &mut R, prealloc: usize) -> (Vec<u8>, bool) {
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                if out.len() >= MAX_OUTPUT_BYTES {
-                    truncated = true;
-                    continue;
+                if truncated {
+                    break;
                 }
-                let take = (MAX_OUTPUT_BYTES - out.len()).min(n);
+                let remaining = MAX_OUTPUT_BYTES.saturating_sub(out.len());
+                let take = remaining.min(n);
                 out.extend_from_slice(&buf[..take]);
                 if take < n {
                     truncated = true;

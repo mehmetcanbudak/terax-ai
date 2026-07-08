@@ -1,15 +1,17 @@
+import { useEffect, useRef } from "react";
 import { PopoverContent } from "@/components/ui/popover";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { fileIconUrl } from "@/modules/explorer/lib/iconResolver";
-import { useEffect, useRef } from "react";
+
+export type FilePickerWorkspaceState =
+  | { open: false }
+  | { open: true; indexing: boolean; truncated: boolean };
 
 type Props = {
   files: readonly string[];
   activeIndex: number;
-  indexing: boolean;
-  truncated: boolean;
-  hasWorkspace: boolean;
+  workspace: FilePickerWorkspaceState;
   onPick: (file: string) => void;
   onHover: (index: number) => void;
 };
@@ -17,9 +19,7 @@ type Props = {
 export function FilePickerContent({
   files,
   activeIndex,
-  indexing,
-  truncated,
-  hasWorkspace,
+  workspace,
   onPick,
   onHover,
 }: Props) {
@@ -45,11 +45,11 @@ export function FilePickerContent({
       <div className="border-b border-border/60 px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
         Workspace files
       </div>
-      {!hasWorkspace ? (
+      {!workspace.open ? (
         <div className="px-3 py-3 text-[11px] text-muted-foreground">
           No workspace open
         </div>
-      ) : indexing && files.length === 0 ? (
+      ) : workspace.indexing && files.length === 0 ? (
         <div className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground">
           <Spinner className="size-3" />
           <span>Indexing workspace…</span>
@@ -82,6 +82,8 @@ export function FilePickerContent({
                   <img
                     src={fileIconUrl(name)}
                     alt=""
+                    width={16}
+                    height={16}
                     className="size-4 shrink-0"
                   />
                   <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
@@ -96,7 +98,7 @@ export function FilePickerContent({
               );
             })}
           </div>
-          {truncated && (
+          {workspace.truncated && (
             <div className="border-t border-border/60 px-2.5 py-1.5 text-[10px] text-muted-foreground">
               Workspace is large - refine your query to narrow results.
             </div>

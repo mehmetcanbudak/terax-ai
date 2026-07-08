@@ -1,0 +1,120 @@
+export type PiPhase = "disconnected" | "starting" | "ready" | "error";
+
+export type PiRuntimeState = {
+  phase: PiPhase;
+  detail: string | null;
+};
+
+export type PiPackageInfo = {
+  name: string;
+  version: string | null;
+  loaded: boolean;
+  exportCount: number;
+  error: string | null;
+};
+
+export type CapabilityAuditSource = "app" | "core" | "mcp" | "workflow";
+
+export type CapabilityAuditEntry = {
+  sequence: number;
+  sessionId: string;
+  toolCallId: string;
+  toolName: string;
+  approved: boolean;
+  allowed: boolean;
+  outcome: "blocked" | "succeeded" | "failed";
+  message?: string;
+};
+
+export type PiHostInfo = {
+  hostVersion: string;
+  piSdkLoaded: boolean;
+  piPackages: PiPackageInfo[];
+};
+
+export type PiDiagnostics = PiHostInfo & {
+  node: {
+    version: string;
+    execPath: string;
+    platform: string;
+    arch: string;
+    pid: number;
+    cwd: string;
+  };
+  config: {
+    toolMode: string;
+    enabledTools?: string[];
+    approvalRequiredTools?: string[];
+    sessionStorage: string;
+    apiKeys: Array<{ name: string; configured: boolean }>;
+    forwardedEnvNames?: string[];
+  };
+  capabilities?: {
+    tools: boolean;
+    files: boolean;
+    shell: boolean;
+    git: boolean;
+    terminal: boolean;
+    editor: boolean;
+  };
+  protocol?: {
+    protocolVersion?: number;
+    allowedMethods: string[];
+  };
+  limits?: {
+    maxPromptChars: number;
+    maxSessions: number;
+  };
+  manager?: {
+    idleShutdownMs: number;
+    methodTimeouts: Array<{ method: string; timeoutMs: number }>;
+  };
+  capabilityAudit?: CapabilityAuditEntry[];
+  sessions: Array<{
+    id: string;
+    title: string;
+    status: string;
+    cwd?: string | null;
+    sdkSessionFile?: string | null;
+  }>;
+};
+
+export type PiStatusView = {
+  label: string;
+  tone: "muted" | "progress" | "success" | "error";
+  canStart: boolean;
+  canStop: boolean;
+};
+
+export function getPiStatusView(state: PiRuntimeState): PiStatusView {
+  switch (state.phase) {
+    case "disconnected":
+      return {
+        label: "Not connected",
+        tone: "muted",
+        canStart: true,
+        canStop: false,
+      };
+    case "starting":
+      return {
+        label: "Connecting",
+        tone: "progress",
+        canStart: false,
+        canStop: true,
+      };
+    case "ready":
+      return {
+        label: "Ready",
+        tone: "success",
+        canStart: false,
+        canStop: true,
+      };
+    case "error":
+      return {
+        label: "Needs attention",
+        tone: "error",
+        canStart: true,
+        canStop: false,
+      };
+  }
+}

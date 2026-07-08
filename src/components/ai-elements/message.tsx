@@ -1,5 +1,20 @@
 "use client";
 
+import ArrowLeft01Icon from "@hugeicons/core-free-icons/ArrowLeft01Icon";
+import ArrowRight01Icon from "@hugeicons/core-free-icons/ArrowRight01Icon";
+import { HugeiconsIcon } from "@hugeicons/react";
+import type { UIMessage } from "ai";
+import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
+import {
+  createContext,
+  memo,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { Streamdown } from "streamdown";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup, ButtonGroupText } from "@/components/ui/button-group";
 import {
@@ -9,20 +24,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-import type { UIMessage } from "ai";
-import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
-import {
-  createContext,
-  memo,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-import { Streamdown } from "streamdown";
 import { ChatStreamingProvider } from "./chat-code";
 import { MarkdownCode } from "./markdown-code";
 
@@ -53,7 +54,7 @@ export const MessageContent = ({
   <div
     className={cn(
       "select-text flex w-fit min-w-0 max-w-full flex-col gap-2 overflow-hidden text-[12px] leading-relaxed",
-      "group-[.is-user]:rounded-2xl group-[.is-user]:rounded-br-sm group-[.is-user]:bg-muted/70 group-[.is-user]:px-3 group-[.is-user]:py-2 group-[.is-user]:text-foreground",
+      "group-[.is-user]:rounded-md group-[.is-user]:rounded-br-sm group-[.is-user]:bg-muted/70 group-[.is-user]:px-3 group-[.is-user]:py-2 group-[.is-user]:text-foreground",
       "group-[.is-assistant]:w-full group-[.is-assistant]:max-w-full group-[.is-assistant]:text-foreground",
       className,
     )}
@@ -125,7 +126,7 @@ const MessageBranchContext = createContext<MessageBranchContextType | null>(
 );
 
 const useMessageBranch = () => {
-  const context = useContext(MessageBranchContext);
+  const context = use(MessageBranchContext);
 
   if (!context) {
     throw new Error(
@@ -268,7 +269,9 @@ export const MessageBranchPrevious = ({
       variant="ghost"
       {...props}
     >
-      {children ?? <HugeiconsIcon icon={ArrowLeft01Icon} size={14} />}
+      {children ?? (
+        <HugeiconsIcon data-icon="inline-start" icon={ArrowLeft01Icon} />
+      )}
     </Button>
   );
 };
@@ -291,7 +294,9 @@ export const MessageBranchNext = ({
       variant="ghost"
       {...props}
     >
-      {children ?? <HugeiconsIcon icon={ArrowRight01Icon} size={14} />}
+      {children ?? (
+        <HugeiconsIcon data-icon="inline-start" icon={ArrowRight01Icon} />
+      )}
     </Button>
   );
 };

@@ -1,16 +1,15 @@
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
-import {
-  ArrowDown01Icon,
-  Cancel01Icon,
-  FileEditIcon,
-  FilePlusIcon,
-  FolderAddIcon,
-  Tick02Icon,
-} from "@hugeicons/core-free-icons";
+import ArrowDown01Icon from "@hugeicons/core-free-icons/ArrowDown01Icon";
+import Cancel01Icon from "@hugeicons/core-free-icons/Cancel01Icon";
+import FileEditIcon from "@hugeicons/core-free-icons/FileEditIcon";
+import FilePlusIcon from "@hugeicons/core-free-icons/FilePlusIcon";
+import FolderAddIcon from "@hugeicons/core-free-icons/FolderAddIcon";
+import Tick02Icon from "@hugeicons/core-free-icons/Tick02Icon";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
-import { usePlanStore, type QueuedEdit } from "../store/planStore";
+import { Button } from "@/components/ui/button";
+import { diffLineClass, diffTextClass } from "@/lib/statusTone";
+import { cn } from "@/lib/utils";
+import { type QueuedEdit, usePlanStore } from "../store/planStore";
 
 function basename(p: string): string {
   const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
@@ -74,7 +73,11 @@ export function PlanDiffReview() {
             onClick={() => clear()}
             disabled={busy}
           >
-            <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
+            <HugeiconsIcon
+              data-icon="inline-start"
+              icon={Cancel01Icon}
+              strokeWidth={2}
+            />
             Discard all
           </Button>
           <Button
@@ -84,7 +87,11 @@ export function PlanDiffReview() {
             onClick={onApply}
             disabled={busy}
           >
-            <HugeiconsIcon icon={Tick02Icon} size={12} strokeWidth={2} />
+            <HugeiconsIcon
+              data-icon="inline-start"
+              icon={Tick02Icon}
+              strokeWidth={2}
+            />
             Apply {queue.length}
           </Button>
         </div>
@@ -111,11 +118,7 @@ function PlanRow({
   const stats = isDir
     ? null
     : diffStats(item.originalContent, item.proposedContent);
-  const Icon = isDir
-    ? FolderAddIcon
-    : isNew
-      ? FilePlusIcon
-      : FileEditIcon;
+  const Icon = isDir ? FolderAddIcon : isNew ? FilePlusIcon : FileEditIcon;
 
   return (
     <li className="group/row overflow-hidden rounded-md border border-border/50 bg-card">
@@ -145,7 +148,7 @@ function PlanRow({
               {basename(item.path)}
             </span>
             {isNew ? (
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400">
+              <span className={cn("text-[10px]", diffTextClass("add"))}>
                 new
               </span>
             ) : null}
@@ -155,10 +158,8 @@ function PlanRow({
           </div>
           {stats ? (
             <div className="mt-0.5 flex items-center gap-2 text-[10px] tabular-nums">
-              <span className="text-emerald-600 dark:text-emerald-400">
-                +{stats.added}
-              </span>
-              <span className="text-destructive">−{stats.removed}</span>
+              <span className={diffTextClass("add")}>+{stats.added}</span>
+              <span className={diffTextClass("remove")}>−{stats.removed}</span>
               <span className="text-muted-foreground">
                 {item.kind === "multi_edit" ? "multi-edit" : item.kind}
               </span>
@@ -173,11 +174,15 @@ function PlanRow({
           type="button"
           size="icon"
           variant="ghost"
-          className="size-5 shrink-0 opacity-0 transition-opacity group-hover/row:opacity-100"
+          className="size-6 shrink-0 opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100"
           onClick={onReject}
-          aria-label="Reject"
+          aria-label={`Reject changes to ${basename(item.path)}`}
         >
-          <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={1.75} />
+          <HugeiconsIcon
+            data-icon="inline-start"
+            icon={Cancel01Icon}
+            strokeWidth={1.75}
+          />
         </Button>
       </div>
       {open && !isDir ? (
@@ -190,6 +195,10 @@ function PlanRow({
       ) : null}
     </li>
   );
+}
+
+function diffKindTone(kind: "add" | "del" | "ctx"): "add" | "remove" {
+  return kind === "add" ? "add" : "remove";
 }
 
 function UnifiedDiffPreview({
@@ -232,9 +241,7 @@ function UnifiedDiffPreview({
             key={i}
             className={cn(
               "flex whitespace-pre",
-              l.kind === "add"
-                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                : "bg-destructive/10 text-destructive",
+              diffLineClass(diffKindTone(l.kind)),
             )}
           >
             <span className="w-4 shrink-0 select-none px-1 text-center opacity-70">

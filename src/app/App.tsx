@@ -25,6 +25,10 @@ import {
   useSelectionAskAi,
 } from "@/modules/ai";
 import { AiComposerProvider } from "@/modules/ai/lib/composer";
+import {
+  isPiComposerRuntimeEnabled,
+  type UseComposerRuntimeOptions,
+} from "@/modules/ai/lib/composerRuntime";
 import { native } from "@/modules/ai/lib/native";
 import { CommandPalette, createCommandItems } from "@/modules/command-palette";
 import {
@@ -34,6 +38,9 @@ import {
 } from "@/modules/editor";
 import { FileExplorer, type FileExplorerHandle } from "@/modules/explorer";
 import type { GitHistorySearchHandle } from "@/modules/git-history";
+import { PiPanelLazy } from "@/modules/pi/PiPanelLazy";
+import type { PiFocusRequest } from "@/modules/pi/PiPanel";
+import { usePiProviderConfig } from "@/modules/pi/lib/usePiProviderConfig";
 import {
   Header,
   type SearchInlineHandle,
@@ -88,6 +95,7 @@ import { ThemeProvider, useThemeFileEditing } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
 import { useWorkspaceEnvStore, type WorkspaceEnv } from "@/modules/workspace";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { PanelImperativeHandle } from "react-resizable-panels";
 import type { SearchAddon } from "@xterm/addon-search";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CloseDialogs } from "./components/CloseDialogs";
@@ -99,6 +107,8 @@ import { WorkspaceSurface } from "./components/WorkspaceSurface";
 import { useAppCloseGuard } from "./hooks/useAppCloseGuard";
 import { useTabCloseGuards } from "./hooks/useTabCloseGuards";
 import { useWorkspaceSwitcher } from "./hooks/useWorkspaceSwitcher";
+
+const CODE_SIDEBAR_ITEMS = [{ id: "code", label: "Code" }] as const;
 
 export default function App() {
   const {
@@ -273,6 +283,7 @@ export default function App() {
     persistSidebarWidth,
     toggleExplorerFocus,
   } = useSidebarPanel(explorerRef);
+  const codePanelRef = useRef<PanelImperativeHandle | null>(null);
 
   const [newEditorOpen, setNewEditorOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -289,6 +300,7 @@ export default function App() {
   const miniOpen = useChatStore((s) => s.mini.open);
   const miniPresence = usePresence(miniOpen, 200);
   const openMini = useChatStore((s) => s.openMini);
+  const toggleMini = useChatStore((s) => s.toggleMini);
   const focusInput = useChatStore((s) => s.focusInput);
   const openPanel = useChatStore((s) => s.openPanel);
   const panelOpen = useChatStore((s) => s.panelOpen);
@@ -296,6 +308,24 @@ export default function App() {
   const respondToApproval = useChatStore((s) => s.respondToApproval);
 
   const { hasComposer, keysLoaded } = useAiBootstrap();
+  const { result: piProvider } = usePiProviderConfig();
+  const piComposerRuntimeEnabled = isPiComposerRuntimeEnabled();
+  const [selectedPiSessionId, setSelectedPiSessionId] = useState<string | null>(
+    null,
+  );
+  const [piFocusRequest, setPiFocusRequest] = useState<PiFocusRequest | null>(
+    null,
+  );
+  const openPiConversation = useCallback((sessionId?: string | null) => {
+    const panel = codePanelRef.current;
+    if ((panel?.getSize().asPercentage ?? 0) <= 0) panel?.resize("260px");
+    if (sessionId) {
+      setPiFocusRequest((current) => ({
+        sessionId,
+        token: (current?.token ?? 0) + 1,
+      }));
+    }
+  }, []);
 
   const activeTab = tabs.find((t) => t.id === activeId);
   const isTerminalTab = activeTab?.kind === "terminal";
@@ -581,6 +611,8 @@ export default function App() {
     }
     return null;
   })();
+  const activeTerminalPrivate =
+    activeTab?.kind === "terminal" && activeTab.private === true;
   const explorerActiveFilePath =
     activeTab?.kind === "editor" || activeTab?.kind === "markdown"
       ? activeTab.path
@@ -682,6 +714,17 @@ export default function App() {
       "blocks.next": () => navigateFocusedBlocks(1),
       "search.focus": () => searchInlineRef.current?.focus(),
       "ai.toggle": togglePanelAndFocus,
+      "ai.toggleMini": () => {
+        if (!hasComposer) {
+          void openSettingsWindow("models");
+          return;
+        }
+        if (piComposerRuntimeEnabled) {
+          openPiConversation(selectedPiSessionId);
+          return;
+        }
+        toggleMini();
+      },
       "ai.askSelection": askFromSelection,
       "agent.focusAttention": () => {
         const t = nextAttentionTarget();
@@ -712,7 +755,12 @@ export default function App() {
       splitActivePaneInActiveTab,
       focusNextPaneInTab,
       toggleSourceControl,
+      hasComposer,
       togglePanelAndFocus,
+      piComposerRuntimeEnabled,
+      openPiConversation,
+      selectedPiSessionId,
+      toggleMini,
       askFromSelection,
       toggleSidebar,
       toggleExplorerFocus,
@@ -894,6 +942,37 @@ export default function App() {
   ]);
 
   const activeCwd = activeTerminalLeafCwd;
+  const piWorkspaceRoot = explorerRoot ?? activeCwd;
+  const piComposerRuntimeOptions = useMemo<UseComposerRuntimeOptions>(
+    () => ({
+      pi: {
+        enabled: piComposerRuntimeEnabled,
+        context: {
+          workspaceRoot: piWorkspaceRoot,
+          activeCwd,
+          activeFile: activeFilePath,
+          activeTerminalPrivate,
+        },
+        providerConfig: piProvider.ok ? piProvider.config : null,
+        providerReady: hasComposer && keysLoaded && piProvider.ok,
+        selectedSessionId: selectedPiSessionId,
+        onActivateSession: openPiConversation,
+        onSelectedSessionChange: setSelectedPiSessionId,
+      },
+    }),
+    [
+      activeCwd,
+      activeFilePath,
+      activeTerminalPrivate,
+      hasComposer,
+      keysLoaded,
+      openPiConversation,
+      piComposerRuntimeEnabled,
+      piProvider,
+      piWorkspaceRoot,
+      selectedPiSessionId,
+    ],
+  );
 
   const handleNewSpace = useCallback(() => {
     const { spaces, create, setActive } = useSpaces.getState();
@@ -933,7 +1012,8 @@ export default function App() {
     (tabId: number, targetTabId: number, edge: "top" | "bottom") => {
       if (reorderTab(tabId, targetTabId, edge)) {
         const target = tabsRef.current.find((x) => x.id === targetTabId);
-        if (target) useSpaces.getState().setActive(target.spaceId);
+        if (target)
+          useSpaces.getState().setActive(target.spaceId ?? DEFAULT_SPACE_ID);
       }
     },
     [reorderTab],
@@ -954,7 +1034,7 @@ export default function App() {
       const t = tabsRef.current.find((x) => x.id === tabId);
       if (!t) return;
       setActiveId(tabId);
-      useSpaces.getState().setActive(t.spaceId);
+      useSpaces.getState().setActive(t.spaceId ?? DEFAULT_SPACE_ID);
       setSwitcherOpen(false);
     },
     [setActiveId],
@@ -1201,6 +1281,35 @@ export default function App() {
                   />
                 </div>
               </ResizablePanel>
+              <ResizableHandle withHandle />
+              <ResizablePanel
+                id="code-sidebar"
+                panelRef={codePanelRef}
+                defaultSize="260px"
+                minSize="220px"
+                maxSize="480px"
+                collapsible
+                collapsedSize={0}
+              >
+                <div className="flex h-full min-h-0 flex-col border-l border-border/60 bg-card">
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    <PiPanelLazy
+                      activeCwd={activeCwd}
+                      activeFile={activeFilePath}
+                      activeTerminalPrivate={activeTerminalPrivate}
+                      focusRequest={piFocusRequest}
+                      onSelectedSessionChange={setSelectedPiSessionId}
+                      surfaceLabel="Code"
+                      workspaceRoot={piWorkspaceRoot}
+                    />
+                  </div>
+                  <SidebarRail
+                    activeView="code"
+                    items={CODE_SIDEBAR_ITEMS}
+                    onSelectView={() => {}}
+                  />
+                </div>
+              </ResizablePanel>
             </ResizablePanelGroup>
           </main>
 
@@ -1211,11 +1320,11 @@ export default function App() {
               home={home}
               onCd={sendCd}
               onWorkspaceChange={handleWorkspaceChange}
-              onOpenMini={openMini}
-              hasComposer={hasComposer}
-              privateActive={
-                activeTab?.kind === "terminal" && activeTab.private === true
+              onOpenMini={
+                piComposerRuntimeEnabled ? openPiConversation : openMini
               }
+              hasComposer={hasComposer}
+              privateActive={activeTerminalPrivate}
             />
           )}
 
@@ -1292,5 +1401,9 @@ export default function App() {
     </ThemeProvider>
   );
 
-  return <AiComposerProvider>{shell}</AiComposerProvider>;
+  return (
+    <AiComposerProvider runtimeOptions={piComposerRuntimeOptions}>
+      {shell}
+    </AiComposerProvider>
+  );
 }
