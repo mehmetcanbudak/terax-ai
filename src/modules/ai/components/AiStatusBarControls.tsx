@@ -95,12 +95,17 @@ export function AiOpenButton({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-export function AiStatusBarControls() {
+export function AiStatusBarControls({
+  onOpenConversation,
+}: {
+  onOpenConversation?: () => void;
+}) {
   const c = useComposer();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const openMini = useChatStore((s) => s.openMini);
   const miniOpen = useChatStore((s) => s.mini.open);
   const closePanel = useChatStore((s) => s.closePanel);
+  const openConversation = onOpenConversation ?? openMini;
 
   return (
     <div className="flex items-center gap-0.5">
@@ -171,8 +176,8 @@ export function AiStatusBarControls() {
       </Button>
       <IconBtn
         title={miniOpen ? "Mini-window open" : "Open conversation"}
-        onClick={openMini}
-        disabled={miniOpen}
+        onClick={openConversation}
+        disabled={!onOpenConversation && miniOpen}
       >
         <HugeiconsIcon icon={Message01Icon} size={13} strokeWidth={1.75} />
       </IconBtn>

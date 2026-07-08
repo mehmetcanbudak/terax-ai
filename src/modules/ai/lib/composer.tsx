@@ -2,8 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useWhisperRecording } from "../hooks/useWhisperRecording";
 import { expandSnippetTokens, type Snippet } from "../lib/snippets";
+import {
+  useComposerRuntime,
+  type UseComposerRuntimeOptions,
+} from "./composerRuntime";
 import { tryRunSlashCommand, type SlashCommandMeta } from "./slashCommands";
-import { getChat, useChatStore } from "../store/chatStore";
+import { useChatStore } from "../store/chatStore";
 import { useSnippetsStore } from "../store/snippetsStore";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 
@@ -62,12 +66,15 @@ export function useComposer(): ComposerCtx {
 
 type ProviderProps = {
   children: React.ReactNode;
+  runtimeOptions?: UseComposerRuntimeOptions;
 };
 
-export function AiComposerProvider({ children }: ProviderProps) {
-  const sessionId = useChatStore((s) => s.activeSessionId);
-  const status = useChatStore((s) => s.agentMeta.status);
-  const isBusy = status === "thinking" || status === "streaming";
+export function AiComposerProvider({
+  children,
+  runtimeOptions,
+}: ProviderProps) {
+  const runtime = useComposerRuntime(runtimeOptions);
+  const isBusy = runtime.isBusy;
 
   const [value, setValue] = useState("");
   const [files, setFiles] = useState<FileAttachment[]>([]);
@@ -297,17 +304,8 @@ export function AiComposerProvider({ children }: ProviderProps) {
       }
     }
 
-    if (!sessionId) return;
-    const store = useChatStore.getState();
-    store.patchAgentMeta({ hitStepCap: false, compactionNotice: null });
-    if (!store.mini.open) store.openMini();
-    void (async () => {
-      const { getOrCreateChat } = await import("../store/chatRuntime");
-      const chat = getOrCreateChat(sessionId);
-      void chat.sendMessage({ role: "user", parts } as Parameters<
-        typeof chat.sendMessage
-      >[0]);
-    })();
+    if (!runtime.canSend) return;
+    void runtime.send(parts);
     setValue("");
     setFiles([]);
     setPickedSnippets([]);
@@ -317,12 +315,12 @@ export function AiComposerProvider({ children }: ProviderProps) {
   };
 
   const stop = () => {
-    if (!sessionId) return;
-    void getChat(sessionId)?.stop();
+    void runtime.stop();
   };
 
   const canSend =
     !isBusy &&
+    runtime.canSend &&
     (value.trim().length > 0 ||
       files.length > 0 ||
       pickedSnippets.length > 0 ||

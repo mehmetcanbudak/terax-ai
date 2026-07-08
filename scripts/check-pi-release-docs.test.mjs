@@ -37,11 +37,11 @@ describe("checkPiReleaseDocs", () => {
     expect(result.errors).toEqual([]);
   });
 
-  it("fails when release readiness loses final CI success evidence", async () => {
+  it("fails when release readiness loses final CI check-rollup evidence", async () => {
     const root = await mkdtemp(join(tmpdir(), "terax-pi-release-docs-blocker-"));
     await writeFixture(root, {
       "docs/pi-sidebar-release-readiness.md": REQUIRED_RELEASE_READINESS_TEXT.filter(
-        (line) => line !== "completed successfully for PR head",
+        (line) => line !== "statusCheckRollup",
       ).join("\n"),
       "docs/pi-sidebar-manual-smoke-report.md": manualSmokeDoc,
     });
@@ -52,7 +52,7 @@ describe("checkPiReleaseDocs", () => {
     expect(result.errors).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "docs/pi-sidebar-release-readiness.md missing required release-readiness text: completed successfully for PR head",
+          "docs/pi-sidebar-release-readiness.md missing required release-readiness text: statusCheckRollup",
         ),
       ]),
     );

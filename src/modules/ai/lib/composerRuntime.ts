@@ -8,7 +8,6 @@ import type {
   PiSessionStopResult,
 } from "@/modules/pi/lib/sessions";
 import { useChatStore } from "../store/chatStore";
-import { getOrCreateChat } from "../store/chatRuntime";
 
 export const PI_COMPOSER_RUNTIME_STORAGE_KEY = "terax.pi.composerRuntime";
 
@@ -220,18 +219,20 @@ export function useChatComposerRuntime(): ComposerRuntime {
       sessionId,
       canSend: sessionId !== null,
       isBusy,
-      send: (parts) => {
+      send: async (parts) => {
         if (!sessionId) return;
+        const store = useChatStore.getState();
+        store.patchAgentMeta({ hitStepCap: false, compactionNotice: null });
+        if (!store.mini.open) store.openMini();
+        const { getOrCreateChat } = await import("../store/chatRuntime");
         const chat = getOrCreateChat(sessionId);
         void chat.sendMessage({ role: "user", parts } as Parameters<
           typeof chat.sendMessage
         >[0]);
-        const store = useChatStore.getState();
-        store.patchAgentMeta({ hitStepCap: false, compactionNotice: null });
-        if (!store.mini.open) store.openMini();
       },
-      stop: () => {
+      stop: async () => {
         if (!sessionId) return;
+        const { getOrCreateChat } = await import("../store/chatRuntime");
         void getOrCreateChat(sessionId).stop();
       },
     }),

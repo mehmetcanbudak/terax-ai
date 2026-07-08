@@ -144,25 +144,27 @@ composer is pi-backed. 6 mapper tests in `agentRun.test.ts`.
 - Keep `AiInputBar`'s look; swap the runtime. Verify with Stage 0 specs on both
   paths, flip the flag default once green.
 
-**Pi runtime landed behind a flag 2026-07-07.**
-`src/modules/ai/lib/composerRuntime.ts` now has both composer runtimes. Chat is
-still the default. Setting `localStorage["terax.pi.composerRuntime"]` to `"pi"`
-(or `"1"` / `"true"`) selects the Pi-backed runtime.
+**Pi runtime landed behind a flag 2026-07-08.**
+`src/modules/ai/lib/composerRuntime.ts` has both composer runtimes and
+`AiComposerProvider` consumes that runtime seam. Chat is still the default.
+Setting `localStorage["terax.pi.composerRuntime"]` to `"pi"` (or `"1"` /
+`"true"`) selects the Pi-backed runtime.
 
 When the flag is enabled, the docked `AiInputBar` keeps its existing UI but sends
 text parts to `webviewSessionSend`. The runtime creates a lightweight "Quick
 ask" Pi session on first send, reuses either that session or the currently
 selected Pi session, publishes the created-session event so mounted Pi surfaces
-see it, opens/focuses the Pi code surface via App-level activation wiring, and
+see it, opens/focuses the Pi code panel through App-level activation wiring, and
 passes the same workspace/file/terminal prompt context used by `PiPanel`. Local
 busy state now keeps stop wired to `webviewSessionStop` while the Pi turn is in
 flight.
 
 Verification: `src/modules/ai/lib/composerRuntime.test.ts` covers the
 localStorage gate, selection-text send path, prompt context, session reuse, and
-stop behavior. The full frontend test suite passed after landing this stage
-(172 files, 1006 tests). The flag is intentionally not default-on until the
-manual macOS smoke pass and PR CI are green.
+stop behavior. `src/modules/ai/lib/composer.test.tsx` proves the flagged
+`AiComposerProvider` path calls `webviewSessionSend` instead of legacy
+`getOrCreateChat`. The flag is intentionally not default-on until the manual
+macOS smoke pass and updater verification are green.
 
 ### Stage 3 - Retire duplicate surface pieces
 
@@ -172,14 +174,15 @@ manual macOS smoke pass and PR CI are green.
 - Replace `AiChat`/`AiChatMessage` mounts with `PiTranscript`. Delete the
   legacy components only after their last importer is repointed.
 
-**First mini-window routing step landed 2026-07-07.** When the Pi-backed
-composer runtime is selected and provider config is ready, the status-bar agent
-surface buttons now open the Pi code panel / `PiFloatingWindow` path instead of
-opening the legacy AI mini window. The legacy mini window remains mounted only
-for the default chat-runtime path until the Pi composer flag can become the
-default after PR CI/e2e and manual smoke are green. `AppFloatingSurfaces` now
-has an explicit `usePiConversationSurface` guard, with a unit test proving the
-legacy mini window is not rendered for the Pi-backed path.
+**First mini-window routing step landed 2026-07-08.** When the Pi-backed
+composer runtime is selected and provider config is ready, App-level
+conversation open/focus handlers route status-bar agent surface buttons and
+composer activation to the Pi code panel instead of opening the legacy AI mini
+window. The legacy mini window remains mounted only for the default chat-runtime
+path until the Pi composer flag can become the default after PR CI/e2e, manual
+smoke, and updater verification are green. The floating `PiFloatingWindow`
+component remains available, but this release path uses the always-mounted code
+panel as the stable focus target.
 
 **Residual surface audit 2026-07-07.** Current import search shows
 `AiChat`, `AiChatMessage`, `PlanDiffReview`, and `TodoStrip` are only reached

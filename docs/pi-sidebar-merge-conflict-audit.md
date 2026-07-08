@@ -8,8 +8,8 @@ The PR branch is no longer textually merge-conflicted with `origin/main` in the 
 
 ```bash
 git rev-parse HEAD origin/main fork/pi-sidebar
-# latest application-code head inspected: 2694095a3c96899a364f4203288a585d2c2f21bf
-# origin/main: 78a0b3dd79554ad4af89e61d97004f3475cd9953
+# latest application-code head: verify with git rev-parse HEAD
+# origin/main: verify with git rev-parse origin/main
 
 git merge-tree --write-tree HEAD origin/main
 # exits 0
@@ -26,7 +26,7 @@ gh pr view 1 --repo mehmetcanbudak/terax-ai --json headRefOid,mergeStateStatus,m
 # successful checks: frontend, rust, rust-test (windows-latest), rust-test (macos-latest), coverage, e2e (linux)
 ```
 
-CI run `28910393808` completed successfully for PR head `6c8e60ddb74f83d75b7bd9b3c79acf598b9ff612`, including Linux e2e.
+The PR statusCheckRollup is the source of truth for the current pushed head and must show Linux e2e success before merge.
 
 ## Resolution commit
 
@@ -45,7 +45,7 @@ The merge preserved the webview-native Pi boundary:
 
 ## CI/e2e state after conflict resolution
 
-CI was checked after the non-CI cleanup pass. Fork-local CI run `28910393808` for PR head `6c8e60d` passed `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)`. Re-check the current pushed head after any later docs-only tail commit.
+CI is checked with `gh pr view 1 --repo mehmetcanbudak/terax-ai --json headRefOid,mergeStateStatus,mergeable,statusCheckRollup`. Re-check the current pushed head after any later code or docs tail commit and require `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)` to pass.
 
 ## Previously conflicted paths, now resolved
 
