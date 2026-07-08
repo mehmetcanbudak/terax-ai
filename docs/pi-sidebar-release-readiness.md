@@ -8,20 +8,20 @@ Tracking note for the fork-local `pi-sidebar` delivery branch and the webview-na
 - Head branch: `pi-sidebar`
 - Base branch: `main`
 - Latest application-code head inspected: `2694095a3c96899a364f4203288a585d2c2f21bf`
-- Current pushed head: `2694095a3c96899a364f4203288a585d2c2f21bf`
+- Current pushed head: verify with `gh pr view 1 --repo mehmetcanbudak/terax-ai --json headRefOid`
 - Upstream base inspected locally: `origin/main` at `78a0b3dd79554ad4af89e61d97004f3475cd9953`
-- Local merge audit: `git merge-tree --write-tree HEAD origin/main` exits 0 and produced tree `d88f3f50c21505c8b15fac445e1ca18dc6aa4f00`.
-- `gh pr view 1 --repo mehmetcanbudak/terax-ai` reported `mergeStateStatus=CLEAN` and `mergeable=MERGEABLE`.
-- CI run `28903209891` completed successfully for head `2694095a3`: `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)` all completed with `SUCCESS`.
-- CI independently ran on the PR, including the Linux e2e job and the Pi approval spec.
+- Local merge audit: `git merge-tree --write-tree HEAD origin/main` exits 0.
+- `gh pr view 1 --repo mehmetcanbudak/terax-ai` reported `mergeStateStatus=CLEAN` and `mergeable=MERGEABLE` for the latest inspected green check rollup.
+- CI run `28903209891` completed successfully for application-code head `2694095a3`: `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)` all completed with `SUCCESS`.
+- CI independently ran on the PR, including the Linux e2e job and the Pi approval spec. Re-check the current pushed head after any docs-only tail commit.
 
 ## Completion audit checklist
 
 | Status | Objective requirement | Evidence inspected | Remaining gap |
 | --- | --- | --- | --- |
-| Done | Commit and push `pi-sidebar`; open PR. | Fork PR #1 is open at <https://github.com/mehmetcanbudak/terax-ai/pull/1>; `fork/pi-sidebar` points at `2694095a3`. | None for fork-local PR creation and push. |
-| Done | Resolve merge conflicts against current `origin/main`. | `git merge-tree --write-tree HEAD origin/main` exits 0 against `origin/main` `78a0b3dd79554ad4af89e61d97004f3475cd9953` and produced tree `d88f3f50c21505c8b15fac445e1ca18dc6aa4f00`; PR reports `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN`. | None locally. |
-| Done | Confirm CI/e2e green. | CI run `28903209891` completed successfully for PR head `2694095a3`; `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)` are all `SUCCESS`. The latest e2e fix in `2694095a3` uses DOM clicks for transcript approval controls that WebDriver saw but could not click directly under WebKit content visibility. | None for PR CI/e2e. |
+| Done | Commit and push `pi-sidebar`; open PR. | Fork PR #1 is open at <https://github.com/mehmetcanbudak/terax-ai/pull/1>; the branch is pushed and the current head is verified with `gh pr view`. | None for fork-local PR creation and push. |
+| Done | Resolve merge conflicts against current `origin/main`. | `git merge-tree --write-tree HEAD origin/main` exits 0 against `origin/main` `78a0b3dd79554ad4af89e61d97004f3475cd9953`; PR reports `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN` for the latest inspected green check rollup. | None locally. |
+| Done | Confirm CI/e2e green. | CI run `28903209891` completed successfully for application-code head `2694095a3`; `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)` are all `SUCCESS`. The latest e2e fix in `2694095a3` uses DOM clicks for transcript approval controls that WebDriver saw but could not click directly under WebKit content visibility. Re-check the current pushed head after any docs-only tail commit. | None for the application-code PR CI/e2e run. |
 | Blocked | Document and complete manual macOS Pi smoke pass: key save/load, chat, built-in agents, custom Zai endpoint auth, streaming, stop/resume, app restart restore, and window-close behavior. | `docs/pi-sidebar-manual-smoke-report.md` is a maintainer-fillable template covering each named flow, expected evidence, and secret-redaction guidance. | Maintainer must run it in a packaged app with real credentials/endpoints. |
 | Done | Add security-critical mock-provider e2e coverage for Pi tool approval approve and deny through Rust `pi_agent_tool_execute`. | `e2e/specs/pi-approval.e2e.mjs` covers approve creating `e2e/.tmp/pi-approval-approved.txt` and deny leaving `e2e/.tmp/pi-approval-denied.txt` absent. `src/modules/pi/lib/webview-session.ts` routes the e2e sentinel through `pi_agent_tool_execute`. `src/modules/pi/components/PiTranscript.tsx` exposes `pi-tool-approval-approve` and `pi-tool-approval-deny` hooks. `scripts/check-pi-approval-boundary.mjs` guards the spec, sentinel prompts, WebdriverIO glob, and Linux e2e command. CI run `28903209891` passed `e2e (linux)` with this spec included. | None. |
 | Partial by design | Complete Phase C/D convergence. | `src/modules/ai/lib/composerRuntime.ts` and tests cover the Pi-backed quick ask. `src/app/App.tsx` and `src/app/AppWorkspaceSurface.tsx` route the Pi composer path to Pi surfaces. `docs/phase-c-convergence-plan.md` records the residual import audit. `pnpm run check:pi-surface-isolation` guards that `AiChat`, `AiChatMessage`, `PlanDiffReview`, and `TodoStrip` stay isolated to the legacy mini-window fallback or tests. | Legacy fallback chat surfaces remain until the Pi composer runtime can become the default after CI/e2e and manual smoke are green. Runtime collapse/rename remains deferred. |
@@ -49,7 +49,7 @@ pnpm build # exits 0 with existing Rolldown/Hugeicons INVALID_ANNOTATION warning
 pnpm tauri build --bundles app --no-sign --ci # 11M Terax.app, 6.6M updater tarball
 
 git rev-parse HEAD origin/main fork/pi-sidebar
-git merge-tree --write-tree HEAD origin/main # exits 0, tree d88f3f50c21505c8b15fac445e1ca18dc6aa4f00
+git merge-tree --write-tree HEAD origin/main # exits 0
 ```
 
 Rust checks are also covered by PR CI run `28903209891`. Prior local Rust checks remain relevant because the latest changes touched only frontend TypeScript proxy handling, tests, e2e selectors, the Pi transcript test, and docs:

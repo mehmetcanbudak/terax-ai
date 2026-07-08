@@ -13,7 +13,6 @@ git rev-parse HEAD origin/main fork/pi-sidebar
 
 git merge-tree --write-tree HEAD origin/main
 # exits 0
-# tree: d88f3f50c21505c8b15fac445e1ca18dc6aa4f00
 ```
 
 `git merge-tree --write-tree HEAD origin/main` exits 0. That means the current local branch can produce a clean merge tree with the fetched upstream main branch.
@@ -46,7 +45,7 @@ The merge preserved the webview-native Pi boundary:
 
 ## CI/e2e state after conflict resolution
 
-CI was checked after the non-CI cleanup pass. Fork-local CI run `28903209891` for head `2694095a3` passed `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)`.
+CI was checked after the non-CI cleanup pass. Fork-local CI run `28903209891` for application-code head `2694095a3` passed `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)`. Re-check the current pushed head after any docs-only tail commit.
 
 ## Previously conflicted paths, now resolved
 
