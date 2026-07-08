@@ -7,11 +7,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const REQUIRED_RELEASE_READINESS_TEXT = [
   "https://github.com/mehmetcanbudak/terax-ai/pull/1",
-  "Latest application-code head inspected: `6d1bf0d7193aa6a3d7671b0d0054f379fb784458`",
-  "mergeStateStatus=UNSTABLE",
+  "Latest application-code head inspected: `2694095a3c96899a364f4203288a585d2c2f21bf`",
+  "mergeStateStatus=CLEAN",
   "mergeable=MERGEABLE",
-  "Final CI/e2e confirmation is deferred until all non-CI work is done",
-  "CI must independently run on the PR",
+  "CI run `28903209891` completed successfully",
+  "e2e (linux)` all completed with `SUCCESS`",
+  "CI independently ran on the PR",
   "docs/pi-sidebar-manual-smoke-report.md",
   "Complete Phase C/D convergence",
   "Pi-backed quick ask",
@@ -30,8 +31,9 @@ export const REQUIRED_RELEASE_READINESS_TEXT = [
   "pnpm check:updater-key-rotation",
   "cargo clippy --locked --all-targets -- -D warnings",
   "cargo test --locked --features openclicky",
-  "10M",
-  "1776.6 KB",
+  "11M",
+  "6.6M",
+  "1776.7 KB",
   "src/modules/ai/lib/proxyFetch.test.ts",
 ];
 

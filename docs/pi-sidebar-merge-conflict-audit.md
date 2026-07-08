@@ -8,12 +8,12 @@ The PR branch is no longer textually merge-conflicted with `origin/main` in the 
 
 ```bash
 git rev-parse HEAD origin/main fork/pi-sidebar
-# latest application-code head inspected: 6d1bf0d7193aa6a3d7671b0d0054f379fb784458
+# latest application-code head inspected: 2694095a3c96899a364f4203288a585d2c2f21bf
 # origin/main: 78a0b3dd79554ad4af89e61d97004f3475cd9953
 
 git merge-tree --write-tree HEAD origin/main
 # exits 0
-# tree: b6b1744ec9fd0e0fde922ceb47dd02d857830db0
+# tree: d88f3f50c21505c8b15fac445e1ca18dc6aa4f00
 ```
 
 `git merge-tree --write-tree HEAD origin/main` exits 0. That means the current local branch can produce a clean merge tree with the fetched upstream main branch.
@@ -22,12 +22,12 @@ Fork PR status when last inspected:
 
 ```bash
 gh pr view 1 --repo mehmetcanbudak/terax-ai --json headRefOid,mergeStateStatus,mergeable,statusCheckRollup
-# mergeStateStatus: UNSTABLE while the latest e2e (linux) job was still running
+# mergeStateStatus: CLEAN
 # mergeable: MERGEABLE
-# non-e2e checks inspected as successful: frontend, rust, rust-test (windows-latest), rust-test (macos-latest), coverage
+# successful checks: frontend, rust, rust-test (windows-latest), rust-test (macos-latest), coverage, e2e (linux)
 ```
 
-Final CI/e2e confirmation is deferred until all non-CI work is done.
+CI run `28903209891` completed successfully for PR head `2694095a3`, including Linux e2e.
 
 ## Resolution commit
 
@@ -46,7 +46,7 @@ The merge preserved the webview-native Pi boundary:
 
 ## CI/e2e state after conflict resolution
 
-CI should be checked at the end of the non-CI cleanup pass. As of the last lightweight PR inspection, the fork-local CI run for `e6563529d` had successful non-e2e jobs and an in-progress Linux e2e job. The local application-code tail is now `6d1bf0d71`, so the e2e job should be rechecked after the remaining documentation and cleanup commits are pushed.
+CI was checked after the non-CI cleanup pass. Fork-local CI run `28903209891` for head `2694095a3` passed `frontend`, `rust`, `rust-test (windows-latest)`, `rust-test (macos-latest)`, `coverage`, and `e2e (linux)`.
 
 ## Previously conflicted paths, now resolved
 
@@ -54,6 +54,5 @@ Before `b73b79aa`, the direct merge attempt reported 99 conflicted paths across 
 
 ## Maintainer follow-up path
 
-1. Confirm the final CI matrix and Linux e2e job are green after the remaining non-CI work is pushed.
-2. Complete the manual macOS Pi smoke report in `docs/pi-sidebar-manual-smoke-report.md`.
-3. Finish updater key rotation verification with maintainer-held signing secrets and a signed feed.
+1. Complete the manual macOS Pi smoke report in `docs/pi-sidebar-manual-smoke-report.md`.
+2. Finish updater key rotation verification with maintainer-held signing secrets and a signed feed.
